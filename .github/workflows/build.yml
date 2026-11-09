@@ -14,14 +14,19 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - uses: android-actions/setup-android@v3
-      - name: SDK packages
-        run: sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools"
-      - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.9"
-      - name: Build
-        run: gradle :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee /tmp/build.log; exit ${PIPESTATUS[0]}
+      - name: Build (everything logged)
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          {
+            echo "ANDROID_HOME=$ANDROID_HOME"
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+            wget -q https://services.gradle.org/distributions/gradle-8.9-bin.zip -O /tmp/g.zip
+            unzip -q /tmp/g.zip -d /tmp
+            echo "sdk.dir=$ANDROID_HOME" > local.properties
+            /tmp/gradle-8.9/bin/gradle :app:assembleDebug --no-daemon --stacktrace
+          } 2>&1 | tee /tmp/build.log
       - name: Publish result to branch icq-new-apk
         if: always()
         run: |
@@ -32,7 +37,7 @@ jobs:
           else
             echo failed > STATUS
           fi
-          tail -c 60000 /tmp/build.log > build.log 2>/dev/null || true
+          tail -c 80000 /tmp/build.log > build.log 2>/dev/null || echo "no log" > build.log
           git init -q && git checkout -q -b icq-new-apk
           git config user.name "github-actions" && git config user.email "actions@github.com"
           git add -A && git commit -qm "ICQ New build ${GITHUB_SHA::7}: $(cat STATUS)"
