@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ICQ New — веб-версия</title>
+<link rel="icon" href="/logo.svg">
+<style>
+  :root { --g: #22FF01; --g2: #00CB66; --bg: #0e1110; --side: #121614; --card: #1a201c; --t: #e9f1ec; --m: #8d9b93; --line: #212924; --out: #17b85a; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--t); }
+  button { font: inherit; cursor: pointer; border: 0; }
+  a { color: #5fe08a; }
+  /* login */
+  #login { height: 100%; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .lg { display: flex; gap: 48px; align-items: center; background: var(--side); border: 1px solid var(--line); border-radius: 26px; padding: 40px; max-width: 860px; }
+  .lg h1 { font-size: 28px; margin-bottom: 18px; display: flex; gap: 10px; align-items: center; }
+  .lg h1 img { width: 40px; }
+  .lg ol { color: var(--m); padding-left: 20px; line-height: 1.9; }
+  .lg ol b { color: var(--t); }
+  .ltabs { display: flex; gap: 6px; margin-bottom: 12px; }
+  .ltabs button { flex: 1; padding: 9px; border-radius: 12px; background: var(--card); color: var(--m); font-weight: 600; }
+  .ltabs button.on { background: var(--g2); color: #fff; }
+  .ph { width: 300px; display: flex; flex-direction: column; }
+  .ph label { color: var(--m); font-size: 13px; margin: 10px 0 4px; display: block; }
+  .ph select, .ph input { width: 100%; padding: 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); color: var(--t); font: inherit; outline: none; }
+  .prow { display: flex; gap: 8px; align-items: center; } .prow span { background: var(--card); border: 1px solid var(--line); padding: 12px; border-radius: 12px; }
+  .ph .big { margin-top: 16px; width: 100%; padding: 13px; border-radius: 12px; background: linear-gradient(135deg, var(--g), var(--g2)); color: #04140a; font-weight: 700; }
+  .ph .link { margin-top: 10px; background: none; color: var(--m); }
+  .err { color: #ff6b6b; font-size: 13px; margin-top: 10px; min-height: 18px; }
+  .qr { width: 264px; height: 264px; background: #fff; border-radius: 18px; padding: 10px; display: flex; align-items: center; justify-content: center; position: relative; }
+  .qr img { width: 100%; height: 100%; }
+  .qr .ov { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(255,255,255,.92); border-radius: 18px; color: #111; font-weight: 700; flex-direction: column; gap: 10px; }
+  .qr .ov button { background: var(--g2); color: #fff; padding: 8px 14px; border-radius: 10px; }
+  /* app */
+  #app { display: none; height: 100%; }
+  .side { width: 360px; min-width: 280px; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; }
+  .side .hd { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .side .hd img { width: 30px; }
+  .side .hd b { flex: 1; font-size: 18px; }
+  .side .hd button { background: none; color: var(--m); font-size: 13px; }
+  .search { margin: 10px 12px; padding: 10px 14px; border-radius: 12px; background: var(--card); border: 1px solid var(--line); color: var(--t); outline: none; }
+  .tabs { display: flex; gap: 6px; padding: 0 12px 8px; flex-wrap: wrap; }
+  .tabs button { background: var(--card); color: var(--m); padding: 6px 12px; border-radius: 20px; font-size: 13px; }
+  .tabs button.on { background: var(--g2); color: #fff; }
+  .list { overflow-y: auto; flex: 1; }
+  .item { display: flex; gap: 12px; padding: 10px 14px; align-items: center; cursor: pointer; transition: background .15s; }
+  .item:hover { background: #18201b; }
+  .item.on { background: #1d2a22; }
+  .av { width: 48px; height: 48px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 19px; background-size: cover; background-position: center; }
+  .item .tx { flex: 1; min-width: 0; }
+  .item .nm { display: flex; justify-content: space-between; gap: 8px; }
+  .item .nm b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+  .item .nm span { color: var(--m); font-size: 12px; flex: none; }
+  .item .pv { color: var(--m); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+  .main { flex: 1; display: flex; flex-direction: column; min-width: 0; background: #0b0e0c radial-gradient(circle at 20% 20%, rgba(34,255,1,.04), transparent 40%); }
+  .main .hd { display: flex; align-items: center; gap: 12px; padding: 10px 18px; background: var(--side); border-bottom: 1px solid var(--line); min-height: 64px; }
+  .main .hd .av { width: 40px; height: 40px; font-size: 16px; }
+  .main .hd small { color: var(--m); display: block; font-size: 13px; }
+  .msgs { flex: 1; overflow-y: auto; padding: 16px 8% 10px; display: flex; flex-direction: column; gap: 3px; }
+  .m { max-width: min(560px, 75%); padding: 7px 11px 6px; border-radius: 16px; background: var(--card); align-self: flex-start; white-space: pre-wrap; word-wrap: break-word; animation: pop .2s ease-out; position: relative; }
+  .m.out { align-self: flex-end; background: linear-gradient(135deg, #22c65a, #11a955); color: #fff; }
+  .m .who { color: #5fe08a; font-weight: 600; font-size: 13px; margin-bottom: 2px; }
+  .m .tm { float: right; font-size: 11px; opacity: .7; margin: 6px 0 -4px 10px; }
+  .m.sys { align-self: center; background: rgba(255,255,255,.06); color: var(--m); font-size: 13px; border-radius: 12px; }
+  .m img.ph { max-width: 100%; max-height: 360px; border-radius: 12px; display: block; margin: 2px 0; }
+  .m .file { display: flex; gap: 8px; align-items: center; }
+  .m code { background: rgba(0,0,0,.3); padding: 1px 5px; border-radius: 5px; font-family: ui-monospace, monospace; }
+  .m pre { background: rgba(0,0,0,.3); padding: 8px; border-radius: 8px; font-family: ui-monospace, monospace; overflow-x: auto; }
+  .m .sp { background: #556; color: transparent; border-radius: 4px; cursor: pointer; }
+  .m .sp.open { background: none; color: inherit; }
+  .m .mention { color: #7fd3ff; font-weight: 600; cursor: pointer; }
+  .m.out .mention, .m.out a { color: #eaffef; text-decoration: underline; }
+  .day { align-self: center; color: var(--m); font-size: 12px; background: rgba(255,255,255,.05); padding: 3px 10px; border-radius: 10px; margin: 10px 0; }
+  @keyframes pop { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
+  .comp { display: flex; gap: 10px; padding: 12px 16px; background: var(--side); border-top: 1px solid var(--line); }
+  .comp textarea { flex: 1; resize: none; background: var(--card); color: var(--t); border: 1px solid var(--line); border-radius: 18px; padding: 11px 16px; font: inherit; outline: none; max-height: 140px; }
+  .comp button { width: 46px; height: 46px; border-radius: 50%; background: var(--g2); color: #fff; font-size: 20px; }
+  .empty { margin: auto; color: var(--m); text-align: center; }
+  .empty img { width: 90px; opacity: .8; margin-bottom: 12px; }
+  @media (max-width: 760px) { .lg { flex-direction: column; padding: 24px; gap: 24px } .side { width: 100%; } #app.chat .side { display: none } #app:not(.chat) .main { display: none } .back { display: inline-block !important } }
+  .back { display: none; background: none; color: var(--t); font-size: 22px; }
+</style>
+</head>
+<body>
+<div id="login">
+  <div class="lg">
+    <div>
+      <h1><img src="/logo.svg" alt="">ICQ New Web</h1>
+      <ol>
+        <li>Откройте <b>ICQ New</b> на телефоне</li>
+        <li>Перейдите в <b>Профиль → Веб-версия</b></li>
+        <li>Наведите камеру на этот <b>QR-код</b></li>
+      </ol>
+      <p style="color:var(--m);margin-top:18px;font-size:13px">Нет приложения? <a href="https://icq-new.ru">Скачать для Android</a></p>
+    </div>
+    <div>
+      <div class="ltabs"><button id="t-qr" class="on" onclick="loginTab('qr')">QR-код</button><button id="t-ph" onclick="loginTab('ph')">По номеру</button></div>
+      <div id="p-qr" class="qr"><img id="qrimg" alt="QR"><div class="ov" id="qrov"><span>QR-код устарел</span><button onclick="newQr()">Обновить</button></div></div>
+      <div id="p-ph" class="ph" style="display:none">
+        <div id="st-phone">
+          <label>Страна</label>
+          <select id="cc" onchange="ccChanged()"></select>
+          <label>Номер телефона</label>
+          <div class="prow"><span id="dial">+993</span><input id="pnum" inputmode="tel" placeholder="61 234567"></div>
+          <button class="big" onclick="reqCode()">Получить код</button>
+        </div>
+        <div id="st-code" style="display:none">
+          <label>Код из сообщения</label>
+          <input id="pcode" inputmode="numeric" placeholder="123456">
+          <div id="st-name" style="display:none"><label>Ваше имя</label><input id="pname" placeholder="Имя"></div>
+          <button class="big" onclick="verify()">Войти</button>
+          <button class="link" onclick="showStep('phone')">← Другой номер</button>
+        </div>
+        <div id="perr" class="err"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="app">
+  <div class="side">
+    <div class="hd"><img src="/logo.svg" alt=""><b>ICQ New</b><button onclick="logout()">Выйти</button></div>
+    <input class="search" id="q" placeholder="Поиск" oninput="renderList()">
+    <div class="tabs" id="tabs"></div>
+    <div class="list" id="list"></div>
+  </div>
+  <div class="main">
+    <div class="hd" id="chd"><div class="empty" style="margin:0;color:var(--m)">Выберите чат</div></div>
+    <div class="msgs" id="msgs"><div class="empty"><img src="/logo.svg" alt=""><div>Выберите чат слева</div></div></div>
+    <div class="comp" id="comp" style="display:none">
+      <textarea id="inp" rows="1" placeholder="Сообщение" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();send()}"></textarea>
+      <button onclick="send()" title="Отправить">➤</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const COUNTRIES=[["TM","Туркменистан","993"],["RU","Россия","7"],["BY","Беларусь","375"],["KZ","Казахстан","7"],["UZ","Узбекистан","998"],["TR","Турция","90"],["UA","Украина","380"],["AU","Австралия","61"],["AT","Австрия","43"],["AZ","Азербайджан","994"],["AL","Албания","355"],["DZ","Алжир","213"],["AO","Ангола","244"],["AD","Андорра","376"],["AG","Антигуа и Барбуда","1268"],["AR","Аргентина","54"],["AM","Армения","374"],["AW","Аруба","297"],["AF","Афганистан","93"],["BS","Багамы","1242"],["BD","Бангладеш","880"],["BB","Барбадос","1246"],["BH","Бахрейн","973"],["BZ","Белиз","501"],["BE","Бельгия","32"],["BJ","Бенин","229"],["BM","Бермуды","1441"],["BG","Болгария","359"],["BO","Боливия","591"],["BA","Босния и Герцеговина","387"],["BW","Ботсвана","267"],["BR","Бразилия","55"],["BN","Бруней","673"],["BF","Буркина-Фасо","226"],["BI","Бурунди","257"],["BT","Бутан","975"],["VU","Вануату","678"],["VA","Ватикан","39"],["GB","Великобритания","44"],["HU","Венгрия","36"],["VE","Венесуэла","58"],["TL","Восточный Тимор","670"],["VN","Вьетнам","84"],["GA","Габон","241"],["HT","Гаити","509"],["GY","Гайана","592"],["GM","Гамбия","220"],["GH","Гана","233"],["GT","Гватемала","502"],["GN","Гвинея","224"],["GW","Гвинея-Бисау","245"],["DE","Германия","49"],["GI","Гибралтар","350"],["HN","Гондурас","504"],["HK","Гонконг","852"],["GD","Гренада","1473"],["GL","Гренландия","299"],["GR","Греция","30"],["GE","Грузия","995"],["CD","ДР Конго","243"],["DK","Дания","45"],["DJ","Джибути","253"],["DM","Доминика","1767"],["DO","Доминиканская Республика","1809"],["EG","Египет","20"],["ZM","Замбия","260"],["ZW","Зимбабве","263"],["IL","Израиль","972"],["IN","Индия","91"],["ID","Индонезия","62"],["JO","Иордания","962"],["IQ","Ирак","964"],["IR","Иран","98"],["IE","Ирландия","353"],["IS","Исландия","354"],["ES","Испания","34"],["IT","Италия","39"],["YE","Йемен","967"],["KP","КНДР","850"],["CV","Кабо-Верде","238"],["KY","Каймановы острова","1345"],["KH","Камбоджа","855"],["CM","Камерун","237"],["CA","Канада","1"],["QA","Катар","974"],["KE","Кения","254"],["CY","Кипр","357"],["KG","Киргизия","996"],["KI","Кирибати","686"],["CN","Китай","86"],["CO","Колумбия","57"],["KM","Коморы","269"],["CG","Конго","242"],["XK","Косово","383"],["CR","Коста-Рика","506"],["CI","Кот-д’Ивуар","225"],["CU","Куба","53"],["KW","Кувейт","965"],["CW","Кюрасао","599"],["LA","Лаос","856"],["LV","Латвия","371"],["LS","Лесото","266"],["LR","Либерия","231"],["LB","Ливан","961"],["LY","Ливия","218"],["LT","Литва","370"],["LI","Лихтенштейн","423"],["LU","Люксембург","352"],["MU","Маврикий","230"],["MR","Мавритания","222"],["MG","Мадагаскар","261"],["MO","Макао","853"],["MW","Малави","265"],["MY","Малайзия","60"],["ML","Мали","223"],["MV","Мальдивы","960"],["MT","Мальта","356"],["MA","Марокко","212"],["MH","Маршалловы Острова","692"],["MX","Мексика","52"],["FM","Микронезия","691"],["MZ","Мозамбик","258"],["MD","Молдова","373"],["MC","Монако","377"],["MN","Монголия","976"],["MM","Мьянма","95"],["NA","Намибия","264"],["NR","Науру","674"],["NP","Непал","977"],["NE","Нигер","227"],["NG","Нигерия","234"],["NL","Нидерланды","31"],["NI","Никарагуа","505"],["NZ","Новая Зеландия","64"],["NC","Новая Каледония","687"],["NO","Норвегия","47"],["AE","ОАЭ","971"],["OM","Оман","968"],["PK","Пакистан","92"],["PW","Палау","680"],["PS","Палестина","970"],["PA","Панама","507"],["PG","Папуа — Новая Гвинея","675"],["PY","Парагвай","595"],["PE","Перу","51"],["PL","Польша","48"],["PT","Португалия","351"],["PR","Пуэрто-Рико","1787"],["RE","Реюньон","262"],["RW","Руанда","250"],["RO","Румыния","40"],["US","США","1"],["SV","Сальвадор","503"],["WS","Самоа","685"],["SM","Сан-Марино","378"],["ST","Сан-Томе и Принсипи","239"],["SA","Саудовская Аравия","966"],["MK","Северная Македония","389"],["SC","Сейшелы","248"],["SN","Сенегал","221"],["VC","Сент-Винсент и Гренадины","1784"],["KN","Сент-Китс и Невис","1869"],["LC","Сент-Люсия","1758"],["RS","Сербия","381"],["SG","Сингапур","65"],["SY","Сирия","963"],["SK","Словакия","421"],["SI","Словения","386"],["SB","Соломоновы Острова","677"],["SO","Сомали","252"],["SD","Судан","249"],["SR","Суринам","597"],["SL","Сьерра-Леоне","232"],["TJ","Таджикистан","992"],["TH","Таиланд","66"],["TW","Тайвань","886"],["TZ","Танзания","255"],["TG","Того","228"],["TO","Тонга","676"],["TT","Тринидад и Тобаго","1868"],["TV","Тувалу","688"],["TN","Тунис","216"],["UG","Уганда","256"],["UY","Уругвай","598"],["FO","Фарерские острова","298"],["FJ","Фиджи","679"],["PH","Филиппины","63"],["FI","Финляндия","358"],["FR","Франция","33"],["PF","Французская Полинезия","689"],["HR","Хорватия","385"],["CF","ЦАР","236"],["TD","Чад","235"],["ME","Черногория","382"],["CZ","Чехия","420"],["CL","Чили","56"],["CH","Швейцария","41"],["SE","Швеция","46"],["LK","Шри-Ланка","94"],["EC","Эквадор","593"],["GQ","Экваториальная Гвинея","240"],["ER","Эритрея","291"],["SZ","Эсватини","268"],["EE","Эстония","372"],["ET","Эфиопия","251"],["ZA","ЮАР","27"],["KR","Южная Корея","82"],["SS","Южный Судан","211"],["JM","Ямайка","1876"],["JP","Япония","81"]];
+const COLORS = ['#e17076','#faa774','#a695e7','#7bc862','#6ec9cb','#65aadd','#ee7aae','#2bb673'];
+const BOT = 10000000;
+let token = localStorage.getItem('icq_token'), me = null, rev = 0;
+let users = {}, groups = {}, msgs = {}, cur = null, ws = null, filter = 'all', qrCode = null, qrTimer = null;
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const api = async (path, opt = {}) => {
+  const r = await fetch(path, { ...opt, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(opt.headers || {}) } });
+  if (r.status === 401) { logout(); throw new Error('401'); }
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.status);
+  return r.json();
+};
+const absUrl = u => !u ? null : (u.startsWith('/') ? u : u);
+
+/* ---------- formatting like Telegram: **b** __i__ ~~s~~ `code` ```pre``` ||spoiler|| --u-- */
+function fmt(t) {
+  let s = esc(t);
+  s = s.replace(/```([\s\S]+?)```/g, '<pre>$1</pre>');
+  s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  s = s.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+  s = s.replace(/__(.+?)__/g, '<i>$1</i>');
+  s = s.replace(/~~(.+?)~~/g, '<s>$1</s>');
+  s = s.replace(/--(.+?)--/g, '<u>$1</u>');
+  s = s.replace(/\|\|(.+?)\|\|/g, '<span class="sp" onclick="this.classList.add(\'open\')">$1</span>');
+  s = s.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+  s = s.replace(/(^|\s)@([A-Za-z0-9_]{3,32})/g, '$1<span class="mention" onclick="openMention(\'$2\')">@$2</span>');
+  return s;
+}
+
+/* ---------- login by phone ---------- */
+const flag = iso => iso.toUpperCase().replace(/./g, ch => String.fromCodePoint(0x1F1E6 + ch.charCodeAt(0) - 65));
+function loginTab(t) {
+  $('t-qr').classList.toggle('on', t === 'qr'); $('t-ph').classList.toggle('on', t === 'ph');
+  $('p-qr').style.display = t === 'qr' ? 'flex' : 'none'; $('p-ph').style.display = t === 'ph' ? 'flex' : 'none';
+  if (t === 'ph' && !$('cc').options.length) initCountries();
+}
+async function initCountries() {
+  $('cc').innerHTML = COUNTRIES.map(([i, n, d]) => `<option value="${i}">${flag(i)} ${esc(n)} +${d}</option>`).join('');
+  try { const g = await api('/api/geo'); if (g.country && COUNTRIES.some(c => c[0] === g.country)) $('cc').value = g.country; } catch (e) {}
+  ccChanged();
+}
+function ccChanged() { const c = COUNTRIES.find(x => x[0] === $('cc').value); $('dial').textContent = '+' + (c ? c[2] : ''); }
+function fullPhone() { return $('dial').textContent + $('pnum').value.replace(/\D/g, ''); }
+function showStep(s) { $('st-phone').style.display = s === 'phone' ? 'block' : 'none'; $('st-code').style.display = s === 'code' ? 'block' : 'none'; $('perr').textContent = ''; }
+async function reqCode() {
+  try { await api('/api/auth/request', { method: 'POST', body: JSON.stringify({ phone: fullPhone() }) }); showStep('code'); $('pcode').focus(); }
+  catch (e) { $('perr').textContent = e.message; }
+}
+async function verify() {
+  try {
+    const body = { phone: fullPhone(), code: $('pcode').value.trim(), device: 'Web · ' + navigator.platform };
+    if ($('st-name').style.display !== 'none') body.name = $('pname').value.trim();
+    const r = await api('/api/auth/verify', { method: 'POST', body: JSON.stringify(body) });
+    if (r.need_name) { $('st-name').style.display = 'block'; $('perr').textContent = 'Новый аккаунт: введите имя'; $('pname').focus(); return; }
+    token = r.token; localStorage.setItem('icq_token', token); clearInterval(qrTimer); start();
+  } catch (e) { $('perr').textContent = e.message; }
+}
+
+/* ---------- login by QR ---------- */
+async function newQr() {
+  $('qrov').style.display = 'none';
+  const r = await api('/api/qr/new', { method: 'POST' });
+  qrCode = r.code;
+  $('qrimg').src = '/api/qr/' + r.code + '/svg';
+  clearInterval(qrTimer);
+  const started = Date.now();
+  qrTimer = setInterval(async () => {
+    if (Date.now() - started > 280000) { clearInterval(qrTimer); $('qrov').style.display = 'flex'; return; }
+    try {
+      const p = await api('/api/qr/' + qrCode);
+      if (p.ok) { clearInterval(qrTimer); token = p.token; localStorage.setItem('icq_token', token); start(); }
+    } catch (e) { clearInterval(qrTimer); $('qrov').style.display = 'flex'; }
+  }, 2000);
+}
+
+function logout() {
+  if (token) fetch('/api/logout', { method: 'POST', headers: { Authorization: 'Bearer ' + token } }).catch(() => {});
+  localStorage.removeItem('icq_token'); token = null; if (ws) ws.close();
+  $('app').style.display = 'none'; $('login').style.display = 'flex'; newQr();
+}
+
+/* ---------- data ---------- */
+function peerOf(m) { return m.group_id ? -m.group_id : (m.from_uin === me.uin ? m.to_uin : m.from_uin); }
+function addMsg(m) {
+  const p = peerOf(m);
+  const arr = msgs[p] || (msgs[p] = []);
+  const i = arr.findIndex(x => x.id === m.id);
+  if (m.kind === 'gone') { if (i >= 0) arr.splice(i, 1); return; }
+  if (i >= 0) arr[i] = m; else arr.push(m);
+  arr.sort((a, b) => a.ts - b.ts);
+}
+async function loadAll() {
+  me = await api('/api/me');
+  const [cs, gs] = await Promise.all([api('/api/contacts'), api('/api/groups')]);
+  cs.forEach(u => users[u.uin] = u);
+  gs.forEach(g => groups[g.id] = g);
+  let more = true;
+  while (more) {
+    const r = await api('/api/updates?rev=' + rev + '&limit=1000');
+    r.messages.forEach(addMsg);
+    rev = r.rev; more = r.more;
+  }
+  for (const p of Object.keys(msgs)) {
+    const n = +p;
+    if (n > 0 && !users[n]) { try { users[n] = await api('/api/users/' + n); } catch (e) {} }
+  }
+}
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws?token=${token}`);
+  ws.onmessage = async ev => {
+    const d = JSON.parse(ev.data);
+    if (d.type === 'message' || d.type === 'update') {
+      const m = d.message; addMsg(m);
+      const p = peerOf(m);
+      if (p > 0 && !users[p]) { try { users[p] = await api('/api/users/' + p); } catch (e) {} }
+      renderList(); if (cur === p) renderChat(true);
+      if (d.type === 'message' && m.from_uin !== me.uin && document.hidden) notify(m);
+    } else if (d.type === 'presence' && users[d.uin]) {
+      users[d.uin].online = d.online; renderList(); if (cur === d.uin) renderHeader();
+    }
+  };
+  ws.onclose = () => { if (token) setTimeout(connect, 3000); };
+}
+function notify(m) {
+  if (Notification.permission === 'granted') new Notification(nameOf(peerOf(m)), { body: m.text || 'Вложение', icon: '/logo.svg' });
+}
+
+/* ---------- render ---------- */
+function nameOf(p) { return p < 0 ? (groups[-p]?.name || 'Группа') : (p === me.uin ? 'Избранное' : (users[p]?.name || ('ID ' + p))); }
+function avatarHtml(p, cls = '') {
+  const url = p < 0 ? groups[-p]?.avatar_url : users[p]?.avatar_url;
+  const n = nameOf(p);
+  if (url) return `<div class="av ${cls}" style="background-image:url('${esc(absUrl(url))}')"></div>`;
+  if (p === BOT) return `<div class="av ${cls}" style="background:url('/bot.svg') center/cover"></div>`;
+  if (p === me.uin) return `<div class="av ${cls}" style="background:#000"><img src="/logo.svg" style="width:70%"></div>`;
+  return `<div class="av ${cls}" style="background:${COLORS[Math.abs(p) % COLORS.length]}">${esc(n.trim()[0] || '?').toUpperCase()}</div>`;
+}
+function kindOf(p) { if (p === BOT) return 'bots'; if (p < 0) return groups[-p]?.kind === 'channel' ? 'channels' : 'groups'; return 'personal'; }
+function preview(m) {
+  if (!m) return '';
+  if (m.deleted) return 'Сообщение удалено';
+  return ({ image: '🖼 Фото', voice: '🎤 Голосовое', file: '📎 ' + (m.att_name || 'Файл'), sticker: 'Стикер', video_note: '⏺ Видеосообщение' })[m.kind] || m.text;
+}
+function hm(ts) { const d = new Date(ts); return d.toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' }); }
+function renderTabs() {
+  const t = [['all', 'Все'], ['personal', 'Личные'], ['groups', 'Группы'], ['channels', 'Каналы'], ['bots', 'Боты']];
+  $('tabs').innerHTML = t.map(([k, v]) => `<button class="${filter === k ? 'on' : ''}" onclick="filter='${k}';renderTabs();renderList()">${v}</button>`).join('');
+}
+function renderList() {
+  const q = $('q').value.trim().toLowerCase();
+  const peers = new Set(Object.keys(msgs).map(Number));
+  Object.keys(groups).forEach(g => peers.add(-g));
+  const rows = [...peers].map(p => ({ p, last: (msgs[p] || []).at(-1) }))
+    .filter(r => filter === 'all' || kindOf(r.p) === filter)
+    .filter(r => !q || nameOf(r.p).toLowerCase().includes(q))
+    .sort((a, b) => (b.last?.ts || 0) - (a.last?.ts || 0));
+  $('list').innerHTML = rows.map(({ p, last }) => `
+    <div class="item ${cur === p ? 'on' : ''}" onclick="openChat(${p})">
+      ${avatarHtml(p)}
+      <div class="tx"><div class="nm"><b>${esc(nameOf(p))}</b><span>${last ? hm(last.ts) : ''}</span></div>
+      <div class="pv">${esc(preview(last))}</div></div>
+    </div>`).join('') || '<div class="empty" style="padding:30px">Чатов нет</div>';
+}
+function renderHeader() {
+  const p = cur;
+  let sub = '';
+  if (p < 0) sub = (groups[-p]?.count || '') + (groups[-p]?.kind === 'channel' ? ' подписчиков' : ' участников');
+  else if (p === BOT) sub = 'бот';
+  else if (p !== me.uin) sub = users[p]?.online ? 'в сети' : 'был(а) недавно';
+  $('chd').innerHTML = `<button class="back" onclick="closeChat()">←</button>${avatarHtml(p)}<div><b>${esc(nameOf(p))}</b><small>${esc(sub)}</small></div>`;
+}
+function renderChat(scroll) {
+  const box = $('msgs');
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  const arr = msgs[cur] || [];
+  let html = '', day = '';
+  for (const m of arr) {
+    const d = new Date(m.ts).toLocaleDateString('ru', { day: 'numeric', month: 'long' });
+    if (d !== day) { day = d; html += `<div class="day">${d}</div>`; }
+    if (m.kind === 'system') { html += `<div class="m sys">${esc(m.text)}</div>`; continue; }
+    const out = m.from_uin === me.uin;
+    const who = cur < 0 && !out ? `<div class="who">${esc(users[m.from_uin]?.name || ('ID ' + m.from_uin))}</div>` : '';
+    let body;
+    if (m.deleted) body = '<i style="opacity:.6">Сообщение удалено</i>';
+    else if (m.kind === 'image' || m.kind === 'sticker' && m.att_id) body = `<img class="ph" src="/api/files/${m.att_id}?t=${token}" loading="lazy">` + (m.text ? fmt(m.text) : '');
+    else if (m.kind === 'voice') body = `<audio controls preload="none" src="/api/files/${m.att_id}?t=${token}"></audio>`;
+    else if (m.kind === 'video_note') body = `<video controls preload="metadata" style="width:220px;height:220px;border-radius:50%;object-fit:cover" src="/api/files/${m.att_id}?t=${token}"></video>`;
+    else if (m.kind === 'file') body = `<a class="file" href="/api/files/${m.att_id}?t=${token}" target="_blank">📎 ${esc(m.att_name || 'Файл')}</a>`;
+    else body = fmt(m.text);
+    html += `<div class="m ${out ? 'out' : ''}">${who}${body}<span class="tm">${m.edited ? 'изм. ' : ''}${hm(m.ts)}${out ? (m.read ? ' ✓✓' : ' ✓') : ''}</span></div>`;
+  }
+  box.innerHTML = html || '<div class="empty">Сообщений пока нет</div>';
+  if (scroll === undefined || atBottom) box.scrollTop = box.scrollHeight;
+}
+function openChat(p) {
+  cur = p; document.getElementById('app').classList.add('chat');
+  renderHeader(); renderChat(); renderList();
+  const myRole = p < 0 ? (groups[-p]?.members || []).find(x => x.uin === me.uin)?.role : null;
+  const ch = p < 0 && groups[-p]?.kind === 'channel' && !['owner', 'admin'].includes(myRole);
+  $('comp').style.display = ch ? 'none' : 'flex';
+  $('inp').focus();
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(p < 0 ? { type: 'read', group: -p } : { type: 'read', to: p }));
+}
+async function openMention(name) {
+  try {
+    const r = await api('/api/resolve/' + encodeURIComponent(name));
+    if (r.type === 'user') { users[r.user.uin] = r.user; openChat(r.user.uin); }
+    else if (r.group && groups[r.group.id]) openChat(-r.group.id);
+    else alert('Откройте этот канал в приложении');
+  } catch (e) { alert('@' + name + ' не найден'); }
+}
+function closeChat() { cur = null; document.getElementById('app').classList.remove('chat'); renderList(); }
+function send() {
+  const t = $('inp').value.trim();
+  if (!t || cur === null || !ws || ws.readyState !== 1) return;
+  const cid = 'w' + Date.now() + Math.random().toString(36).slice(2, 8);
+  ws.send(JSON.stringify({ type: 'message', client_id: cid, text: t, kind: 'text', ...(cur < 0 ? { group: -cur } : { to: cur }) }));
+  $('inp').value = '';
+}
+
+async function start() {
+  $('login').style.display = 'none'; $('app').style.display = 'flex';
+  try { await loadAll(); } catch (e) { return; }
+  renderTabs(); renderList(); connect();
+  if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
+}
+if (token) start(); else newQr();
+</script>
+</body>
+</html>

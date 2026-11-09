@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ICQ logo: black circle + green five-petal flower -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#000000" android:pathData="M54,0a54,54 0 1,0 0.01,0z"/>
+    <path android:fillColor="#22FF01"
+        android:pathData="M64.67,34.04 L57.86,44.43 A4.62,4.62 0 0,1 50.14,44.43 L43.33,34.04 A12.76,12.76 0 1,1 64.67,34.04 Z M76.28,57.98 L64.29,54.72 A4.62,4.62 0 0,1 61.91,47.37 L69.68,37.68 A12.76,12.76 0 1,1 76.28,57.98 Z M57.10,76.42 L56.50,64.01 A4.62,4.62 0 0,1 62.75,59.47 L74.36,63.87 A12.76,12.76 0 1,1 57.10,76.42 Z M33.64,63.87 L45.25,59.47 A4.62,4.62 0 0,1 51.50,64.01 L50.90,76.42 A12.76,12.76 0 1,1 33.64,63.87 Z M38.32,37.68 L46.09,47.37 A4.62,4.62 0 0,1 43.71,54.72 L31.72,57.98 A12.76,12.76 0 1,1 38.32,37.68 Z"/>
+</vector>

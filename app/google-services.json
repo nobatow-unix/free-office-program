@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "252075090189",
+    "project_id": "app-c47b9",
+    "storage_bucket": "app-c47b9.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:252075090189:android:d34f99fff02f523bb7d044",
+        "android_client_info": {
+          "package_name": "icq.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDaXPXjMFUt8-KktkMvS-TJnbJ3yzWg8mI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

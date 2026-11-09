@@ -1,0 +1,5 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+google-auth>=2.20
+requests>=2.31
+qrcode==7.4.2
