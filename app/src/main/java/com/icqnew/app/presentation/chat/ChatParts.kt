@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.automirrored.filled.CallReceived
 import androidx.compose.material.icons.automirrored.filled.CallMade
@@ -13,7 +14,6 @@ import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTransformGestures
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -632,7 +632,7 @@ private fun Waveform(seed: Long, progress: Float, color: Color, onSeek: ((Float)
     val seekMod = if (onSeek == null) Modifier else Modifier
         .pointerInput(seed) { detectTapGestures { o -> onSeek((o.x / width).coerceIn(0f, 1f)) } }
         .pointerInput(seed) {
-            androidx.compose.foundation.gestures.detectHorizontalDragGestures { change, _ ->
+            detectHorizontalDragGestures { change, _ ->
                 change.consume()
                 onSeek((change.position.x / width).coerceIn(0f, 1f))
             }
