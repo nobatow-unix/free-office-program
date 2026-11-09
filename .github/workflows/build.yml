@@ -1,21 +1,39 @@
-name: Build APK
+name: Build ICQ New APK
 on:
   push:
+    branches: [icq-new-build]
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
-  build:
+  apk:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - name: SDK packages
+        run: sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools"
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: 8.9
-      - run: gradle :app:assembleDebug --stacktrace
-      - uses: actions/upload-artifact@v4
-        with:
-          name: icq-new-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          gradle-version: "8.9"
+      - name: Build
+        run: gradle :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee /tmp/build.log; exit ${PIPESTATUS[0]}
+      - name: Publish result to branch icq-new-apk
+        if: always()
+        run: |
+          mkdir -p /tmp/out && cd /tmp/out
+          if [ -f "$GITHUB_WORKSPACE/app/build/outputs/apk/debug/app-debug.apk" ]; then
+            cp "$GITHUB_WORKSPACE/app/build/outputs/apk/debug/app-debug.apk" icq-new.apk
+            echo ok > STATUS
+          else
+            echo failed > STATUS
+          fi
+          tail -c 60000 /tmp/build.log > build.log 2>/dev/null || true
+          git init -q && git checkout -q -b icq-new-apk
+          git config user.name "github-actions" && git config user.email "actions@github.com"
+          git add -A && git commit -qm "ICQ New build ${GITHUB_SHA::7}: $(cat STATUS)"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" icq-new-apk
