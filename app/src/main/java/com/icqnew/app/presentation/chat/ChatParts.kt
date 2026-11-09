@@ -36,6 +36,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
@@ -104,6 +106,7 @@ fun shortPreview(m: ChatMessage): String = when {
     m.kind == MessageKind.FILE -> "📎 " + (m.attName ?: "Файл")
     m.kind == MessageKind.VOICE -> "🎤 Голосовое сообщение"
     m.kind == MessageKind.VIDEO_NOTE -> "⏺ Видеосообщение"
+    m.kind == MessageKind.POLL -> "📊 " + m.text
     m.kind == MessageKind.STICKER -> m.text + " Стикер"
     else -> com.icqnew.app.presentation.emoji.RichFormat.plain(m.text)
 }
@@ -170,6 +173,7 @@ fun MessageRow(
     videoSource: (suspend () -> Pair<String, Map<String, String>>?)? = null,
     onVoiceSeek: ((Float) -> Unit)? = null,
     onVoiceSpeed: () -> Unit = {},
+    onVote: ((List<Int>) -> Unit)? = null,
 ) {
     val mine = m.fromMe
     val bigEmoji = remember(m.text, m.kind, m.deleted) {
@@ -279,10 +283,11 @@ fun MessageRow(
                     Bubble(
                         m, firstOfGroup, lastOfGroup, showSender, sender, reply, replyName, voice,
                         onVoice, onImage, loadImage, onFile, onLongPress, onReplyClick, onSenderClick, signature,
-                        onLink, loadPreview, onVoiceSeek, onVoiceSpeed,
+                        onLink, loadPreview, onVoiceSeek, onVoiceSpeed, onReact, onVote,
                     )
                 }
-                if (m.reactions.isNotEmpty()) {
+                val outside = bigEmoji > 0 || (m.kind == MessageKind.VIDEO_NOTE && !m.deleted && videoSource != null)
+                if (outside && m.reactions.isNotEmpty()) {
                     Row(
                         Modifier.padding(top = 3.dp),
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -348,6 +353,7 @@ private fun TextWithMeta(
     linkColor: Color = Color(0xFF3D9BFF),
     onLink: (String, String) -> Unit = { _, _ -> },
     onLongPress: () -> Unit = {},
+    spoilerColor: Color = Color.Unspecified,
     meta: @Composable () -> Unit,
 ) {
     val lastLine = remember { FloatArray(2) } // [0] = right edge of the last line, [1] = line count
@@ -359,7 +365,7 @@ private fun TextWithMeta(
             }
             if (rich) {
                 com.icqnew.app.presentation.emoji.RichText(
-                    text, color = color, linkColor = linkColor, fontSize = 16.sp,
+                    text, color = color, linkColor = linkColor, fontSize = 16.sp, spoilerColor = spoilerColor,
                     onTextLayout = onLayout, onLink = onLink, onLongPress = onLongPress,
                 )
             } else {
@@ -420,6 +426,8 @@ private fun Bubble(
     loadPreview: (suspend (String) -> com.icqnew.app.domain.LinkPreview?)? = null,
     onVoiceSeek: ((Float) -> Unit)? = null,
     onVoiceSpeed: () -> Unit = {},
+    onReact: (String) -> Unit = {},
+    onVote: ((List<Int>) -> Unit)? = null,
 ) {
     val mine = m.fromMe
     val primary = MaterialTheme.colorScheme.primary
@@ -437,7 +445,12 @@ private fun Bubble(
 
     // A photo without captions is shown on its own, with rounded corners and no coloured frame.
     if (isImage && !hasHeader) {
-        ImageContent(m, shape, onImage, loadImage, onLongPress)
+        Column(horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
+            ImageContent(m, shape, onImage, loadImage, onLongPress)
+            if (m.reactions.isNotEmpty()) {
+                ReactionPills(m, false, primary, onReact, Modifier.padding(top = 4.dp))
+            }
+        }
         return
     }
 
@@ -561,11 +574,17 @@ private fun Bubble(
                     }
                 }
             }
+            MessageKind.POLL -> {
+                val p = m.poll
+                if (p != null) PollContent(m, p, fg, primary, onVote) else Text(m.text, color = fg)
+                Box(Modifier.align(Alignment.End)) { Meta(m, metaColor) }
+            }
             else -> {
                 TextWithMeta(
                     m.text, fg, rich = true,
                     linkColor = if (mine) Color.White else Color(0xFF3D9BFF),
                     onLink = onLink, onLongPress = onLongPress,
+                    spoilerColor = if (mine) primary else MaterialTheme.colorScheme.surface,
                 ) { Meta(m, metaColor) }
                 val url = remember(m.text) { com.icqnew.app.presentation.emoji.RichFormat.firstUrl(m.text) }
                 if (url != null && loadPreview != null) {
@@ -576,7 +595,160 @@ private fun Bubble(
         if (signature != null) {
             Text(signature, color = fg.copy(alpha = 0.6f), fontSize = 12.sp, fontStyle = FontStyle.Italic, modifier = inset)
         }
+        // reactions live inside the post, bottom-left (Telegram style)
+        androidx.compose.animation.AnimatedVisibility(
+            visible = m.reactions.isNotEmpty() && !m.deleted,
+            enter = androidx.compose.animation.expandVertically() + androidx.compose.animation.fadeIn(),
+            exit = androidx.compose.animation.shrinkVertically() + androidx.compose.animation.fadeOut(),
+        ) {
+            ReactionPills(m, mine, primary, onReact, inset.padding(top = 5.dp, bottom = 2.dp))
+        }
     }
+}
+
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun ReactionPills(m: ChatMessage, onColored: Boolean, primary: Color, onReact: (String) -> Unit, modifier: Modifier = Modifier) {
+    androidx.compose.foundation.layout.FlowRow(
+        modifier,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        m.reactions.forEach { r ->
+            val bg = when {
+                onColored && r.mine -> Color.White
+                onColored -> Color.White.copy(alpha = 0.22f)
+                r.mine -> primary
+                else -> primary.copy(alpha = 0.13f)
+            }
+            val fgc = when {
+                onColored && r.mine -> primary
+                onColored -> Color.White
+                r.mine -> Color.White
+                else -> primary
+            }
+            val scale by androidx.compose.animation.core.animateFloatAsState(
+                if (r.mine) 1f else 0.97f, androidx.compose.animation.core.spring(dampingRatio = 0.45f), label = "react",
+            )
+            Row(
+                Modifier
+                    .graphicsLayer(scaleX = scale, scaleY = scale)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(bg)
+                    .clickable { onReact(r.emoji) }
+                    .padding(start = 6.dp, end = 9.dp, top = 3.dp, bottom = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                EmojiImage(r.emoji, 18.dp)
+                Spacer(Modifier.width(4.dp))
+                androidx.compose.animation.AnimatedContent(r.count, label = "rc") { c ->
+                    Text(c.toString(), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = fgc)
+                }
+            }
+        }
+    }
+}
+
+/** Telegram-like poll: tap an answer to vote, then animated result bars. */
+@Composable
+private fun PollContent(
+    m: ChatMessage,
+    p: com.icqnew.app.domain.Poll,
+    fg: Color,
+    primary: Color,
+    onVote: ((List<Int>) -> Unit)?,
+) {
+    val accent = if (m.fromMe) Color.White else primary
+    val showResults = p.voted || p.closed || onVote == null
+    var picked by remember(m.id, p.my) { mutableStateOf(p.my.toSet()) }
+    Column(Modifier.width(250.dp).padding(top = 2.dp, bottom = 4.dp)) {
+        com.icqnew.app.presentation.emoji.RichText(m.text, color = fg, fontSize = 16.sp,
+            modifier = Modifier.padding(bottom = 2.dp))
+        Text(
+            (if (p.closed) "Опрос завершён" else if (p.anonymous) "Анонимный опрос" else "Публичный опрос") +
+                if (p.multiple) " · несколько ответов" else "",
+            color = fg.copy(alpha = 0.7f), fontSize = 12.sp,
+        )
+        Spacer(Modifier.height(8.dp))
+        val total = p.voters.coerceAtLeast(1)
+        p.options.forEachIndexed { i, o ->
+            val mineOpt = i in p.my
+            val share = if (showResults) o.votes / total.toFloat() else 0f
+            val anim by androidx.compose.animation.core.animateFloatAsState(
+                share, androidx.compose.animation.core.tween(700, easing = androidx.compose.animation.core.FastOutSlowInEasing), label = "bar",
+            )
+            Column(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                    .clickable(enabled = !showResults && onVote != null) {
+                        if (p.multiple) picked = if (i in picked) picked - i else picked + i
+                        else onVote?.invoke(listOf(i))
+                    }
+                    .padding(vertical = 6.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (showResults) {
+                        Text(
+                            "${(share * 100).roundToInt()}%", color = fg, fontWeight = FontWeight.Bold, fontSize = 14.sp,
+                            modifier = Modifier.width(44.dp),
+                        )
+                    } else {
+                        val on = i in picked
+                        Box(
+                            Modifier.size(22.dp)
+                                .clip(if (p.multiple) RoundedCornerShape(6.dp) else CircleShape)
+                                .background(if (on) accent else Color.Transparent)
+                                .border(2.dp, if (on) accent else fg.copy(alpha = 0.45f), if (p.multiple) RoundedCornerShape(6.dp) else CircleShape),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (on) Icon(Icons.Filled.Check, null, tint = if (m.fromMe) primary else Color.White, modifier = Modifier.size(15.dp))
+                        }
+                        Spacer(Modifier.width(12.dp))
+                    }
+                    Text(o.text, color = fg, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                    if (showResults && mineOpt) {
+                        Icon(Icons.Filled.CheckCircle, null, tint = accent, modifier = Modifier.size(18.dp))
+                    }
+                }
+                if (showResults) {
+                    Box(
+                        Modifier.padding(start = 44.dp, top = 5.dp).fillMaxWidth().height(4.dp)
+                            .clip(RoundedCornerShape(2.dp)).background(fg.copy(alpha = 0.12f)),
+                    ) {
+                        Box(Modifier.fillMaxWidth(anim.coerceIn(0.015f, 1f)).fillMaxHeight().clip(RoundedCornerShape(2.dp))
+                            .background(accent))
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(votesText(p.voters), color = fg.copy(alpha = 0.7f), fontSize = 13.sp)
+            Spacer(Modifier.weight(1f))
+            if (!showResults && p.multiple && picked.isNotEmpty()) {
+                Text(
+                    "Голосовать", color = accent, fontWeight = FontWeight.Bold, fontSize = 14.sp,
+                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { onVote?.invoke(picked.sorted()) }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+            } else if (p.voted && !p.closed && onVote != null) {
+                Text(
+                    "Отменить голос", color = accent, fontSize = 13.sp,
+                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { onVote(emptyList()) }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+            }
+        }
+    }
+}
+
+fun votesText(n: Int): String {
+    val w = when {
+        n % 100 in 11..14 -> "голосов"
+        n % 10 == 1 -> "голос"
+        n % 10 in 2..4 -> "голоса"
+        else -> "голосов"
+    }
+    return if (n == 0) "Пока нет голосов" else "$n $w"
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -653,6 +825,12 @@ private fun Waveform(seed: Long, progress: Float, color: Color, onSeek: ((Float)
 @Composable
 fun Meta(m: ChatMessage, color: Color) {
     Row(verticalAlignment = Alignment.CenterVertically) {
+        if (m.views > 0 && !m.deleted) { // channel post: how many people saw it
+            Icon(Icons.Filled.Visibility, null, tint = color, modifier = Modifier.size(13.dp))
+            Spacer(Modifier.width(2.dp))
+            Text(compactCount(m.views), color = color, fontSize = 11.sp)
+            Spacer(Modifier.width(6.dp))
+        }
         if (m.edited && !m.deleted) {
             Text("изм.", color = color, fontSize = 11.sp)
             Spacer(Modifier.width(4.dp))
@@ -673,6 +851,14 @@ fun Meta(m: ChatMessage, color: Color) {
             }
         }
     }
+}
+
+/** 999 / 1,2K / 12K / 1,3M — like Telegram's view counter. */
+fun compactCount(n: Int): String = when {
+    n < 1000 -> n.toString()
+    n < 10_000 -> String.format(java.util.Locale.US, "%.1fK", n / 1000f).replace(".0K", "K").replace('.', ',')
+    n < 1_000_000 -> "${n / 1000}K"
+    else -> String.format(java.util.Locale.US, "%.1fM", n / 1_000_000f).replace(".0M", "M").replace('.', ',')
 }
 
 fun durationText(ms: Long): String {
@@ -707,12 +893,12 @@ fun MessageActionsSheet(
                     val mine = m.reactions.any { it.emoji == e && it.mine }
                     Box(
                         Modifier
-                            .size(48.dp)
+                            .size(42.dp)
                             .clip(CircleShape)
                             .background(if (mine) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
                             .clickable { onReact(e) },
                         contentAlignment = Alignment.Center,
-                    ) { EmojiImage(e, 32.dp) }
+                    ) { EmojiImage(e, 28.dp) }
                 }
             }
             Spacer(Modifier.height(8.dp))
@@ -720,12 +906,14 @@ fun MessageActionsSheet(
         }
         @Composable
         fun item(label: String, icon: ImageVector, tint: Color?, click: () -> Unit) {
-            ListItem(
-                modifier = Modifier.clickable(onClick = click),
-                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                leadingContent = { Icon(icon, null, tint = tint ?: MaterialTheme.colorScheme.onSurfaceVariant) },
-                headlineContent = { Text(label, color = tint ?: MaterialTheme.colorScheme.onSurface) },
-            )
+            Row(
+                Modifier.fillMaxWidth().clickable(onClick = click).padding(horizontal = 22.dp, vertical = 11.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(icon, null, tint = tint ?: MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(21.dp))
+                Spacer(Modifier.width(18.dp))
+                Text(label, color = tint ?: MaterialTheme.colorScheme.onSurface, fontSize = 15.sp)
+            }
         }
         if (sent && onReply != null) item("Ответить", Icons.AutoMirrored.Filled.Reply, null, onReply)
         if (m.kind == MessageKind.TEXT || m.kind == MessageKind.STICKER) item("Копировать", Icons.Filled.ContentCopy, null, onCopy)
@@ -734,7 +922,7 @@ fun MessageActionsSheet(
         if (m.fromMe && sent && m.kind == MessageKind.TEXT) item("Изменить", Icons.Filled.Edit, null, onEdit)
         if (m.fromMe || canDeleteForAll || !sent) item("Удалить", Icons.Filled.Delete, MaterialTheme.colorScheme.error, onDelete)
         else item("Удалить у себя", Icons.Filled.Delete, MaterialTheme.colorScheme.error, onDelete)
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(12.dp))
     }
 }
 

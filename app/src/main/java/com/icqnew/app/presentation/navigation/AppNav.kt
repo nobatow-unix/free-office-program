@@ -201,6 +201,7 @@ fun AppNav(
                 onOpenChat = {
                     nav.navigate(Routes.chat(uin)) { popUpTo(Routes.HOME) }
                 },
+                onOpenChannel = { gid -> nav.navigate(Routes.join(gid)) },
             )
         }
         composable(

@@ -78,7 +78,7 @@ object Emoji {
             } catch (e: Exception) {
                 // no emoji pictures: system emoji are used
             }
-            categories = groups.map { (g, items) -> Category(titles[g] ?: g, items) }
+            categories = groups.filter { it.key != "Flags" }.map { (g, items) -> Category(titles[g] ?: g, items) }
             try {
                 context.assets.open("stickers/list.txt").bufferedReader().useLines { l -> l.forEach { bigKeys.add(it.trim()) } }
             } catch (e: Exception) {

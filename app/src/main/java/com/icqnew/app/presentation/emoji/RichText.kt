@@ -3,7 +3,24 @@ package com.icqnew.app.presentation.emoji
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.ClipOp
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -46,7 +63,10 @@ object RichFormat {
     val MENTION = Regex("(?<![\\w@])@([A-Za-z0-9_]{3,32})")
 
     /** Text without the formatting marks (for previews / notifications). */
-    fun plain(text: String): String = MARK.replace(text) { m -> m.groupValues.drop(1).firstOrNull { it.isNotEmpty() } ?: "" }
+    fun plain(text: String): String = MARK.replace(text) { m ->
+        if (m.groupValues[7].isNotEmpty()) "▒".repeat(m.groupValues[7].length.coerceIn(3, 12)) // spoiler stays hidden
+        else m.groupValues.drop(1).firstOrNull { it.isNotEmpty() } ?: ""
+    }
 
     fun build(text: String, linkColor: Color, spoilersOpen: Boolean, codeBg: Color): AnnotatedString {
         // 1) formatting marks
@@ -64,8 +84,7 @@ object RichFormat {
                     g[5].isNotEmpty() -> { append(g[5]); addStyle(SpanStyle(textDecoration = TextDecoration.LineThrough), start, length) }
                     g[6].isNotEmpty() -> { append(g[6]); addStyle(SpanStyle(textDecoration = TextDecoration.Underline), start, length) }
                     g[7].isNotEmpty() -> {
-                        append(g[7])
-                        if (!spoilersOpen) addStyle(SpanStyle(color = Color.Transparent, background = Color(0xFF7A7F87)), start, length)
+                        append(g[7]) // covered by animated particles in RichText until tapped
                         addStringAnnotation(TAG_SPOILER, "1", start, length)
                     }
                 }
@@ -106,12 +125,12 @@ fun RichText(
     linkColor: Color = Color(0xFF4FA3FF),
     fontSize: TextUnit = TextUnit.Unspecified,
     codeBackground: Color = Color(0x33000000),
+    spoilerColor: Color = Color.Unspecified,
     onTextLayout: (TextLayoutResult) -> Unit = {},
     onLink: (tag: String, value: String) -> Unit = { _, _ -> },
     onLongPress: () -> Unit = {},
 ) {
-    var spoilersOpen by remember(text) { mutableStateOf(false) }
-    val styled = remember(text, linkColor, spoilersOpen, codeBackground) { RichFormat.build(text, linkColor, spoilersOpen, codeBackground) }
+    val styled = remember(text, linkColor, codeBackground) { RichFormat.build(text, linkColor, false, codeBackground) }
     val (annotated, keys) = remember(styled) { Emoji.annotateStyled(styled) }
     val inline = remember(keys) {
         keys.associate { key ->
@@ -120,21 +139,73 @@ fun RichText(
             }
         }
     }
+    val textColor = if (color == Color.Unspecified) LocalContentColor.current else color
+    val coverColor = if (spoilerColor == Color.Unspecified) MaterialTheme.colorScheme.surface else spoilerColor
+    // ---- spoiler: animated "dust" over the hidden text, revealed with a growing circle from the tap ----
+    // offsets are the same before / after emoji pictures are inserted; `styled` keeps whole ranges
+    val spoilers = remember(styled) { styled.getStringAnnotations(RichFormat.TAG_SPOILER, 0, styled.length) }
+    val reveal = remember(text) { Animatable(0f) }
+    var tapAt by remember(text) { mutableStateOf(Offset.Zero) }
+    val scope = rememberCoroutineScope()
+    val hidden = spoilers.isNotEmpty() && reveal.value < 1f
+    val time = if (hidden) {
+        rememberInfiniteTransition(label = "spoiler").animateFloat(
+            0f, 1f, infiniteRepeatable(tween(6000, easing = LinearEasing)), label = "dust",
+        )
+    } else null
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
     Text(
         annotated,
-        modifier = modifier.pointerInput(annotated) {
-            detectTapGestures(
-                onLongPress = { onLongPress() },
-                onTap = { pos ->
-                    val l = layout ?: return@detectTapGestures
-                    val off = l.getOffsetForPosition(pos)
-                    val a = annotated.getStringAnnotations(off, off).firstOrNull() ?: return@detectTapGestures
-                    if (a.tag == RichFormat.TAG_SPOILER) spoilersOpen = true else onLink(a.tag, a.item)
-                },
-            )
-        },
-        color = if (color == Color.Unspecified) LocalContentColor.current else color,
+        modifier = modifier
+            .pointerInput(annotated) {
+                detectTapGestures(
+                    onLongPress = { onLongPress() },
+                    onTap = { pos ->
+                        val l = layout ?: return@detectTapGestures
+                        val off = l.getOffsetForPosition(pos)
+                        val inSpoiler = reveal.value < 1f && spoilers.any { off in it.start until it.end }
+                        val a = if (inSpoiler) null else annotated.getStringAnnotations(off, off).firstOrNull()
+                        if (a == null && !inSpoiler) return@detectTapGestures
+                        if (a == null) {
+                            if (reveal.value == 0f) {
+                                tapAt = pos
+                                scope.launch { reveal.animateTo(1f, tween(650, easing = FastOutSlowInEasing)) }
+                            }
+                        } else onLink(a.tag, a.item)
+                    },
+                )
+            }
+            .drawWithContent {
+                drawContent()
+                val l = layout ?: return@drawWithContent
+                if (spoilers.isEmpty() || reveal.value >= 1f) return@drawWithContent
+                val t = time?.value ?: 0f
+                val radius = reveal.value * (size.width + size.height)
+                val dot = 1.dp.toPx()
+                for (a in spoilers) {
+                    val path = l.getPathForRange(a.start, a.end)
+                    val b = path.getBounds()
+                    clipPath(path) {
+                        val cut = Path().apply { addOval(Rect(tapAt, radius)) }
+                        clipPath(cut, ClipOp.Difference) {
+                            drawRect(coverColor, b.topLeft, b.size)
+                            val rnd = java.util.Random(a.start * 31L + a.end)
+                            val n = (b.width * b.height / (dot * dot * 22f)).toInt().coerceIn(10, 600)
+                            repeat(n) {
+                                val sx = rnd.nextFloat(); val sy = rnd.nextFloat()
+                                val sp = 0.4f + rnd.nextFloat(); val ph = rnd.nextFloat()
+                                val dir = if (rnd.nextBoolean()) 1f else -1f
+                                val r = dot * (0.6f + rnd.nextFloat() * 0.6f)
+                                val x = b.left + (((sx + dir * t * sp) % 1f) + 1f) % 1f * b.width
+                                val y = b.top + (((sy + t * sp * 0.6f * -dir) % 1f) + 1f) % 1f * b.height
+                                val alpha = 0.25f + 0.75f * kotlin.math.abs(kotlin.math.sin((t * 6f + ph) * 6.2832f))
+                                drawCircle(textColor.copy(alpha = alpha * textColor.alpha), r, Offset(x, y))
+                            }
+                        }
+                    }
+                }
+            },
+        color = textColor,
         fontSize = fontSize,
         inlineContent = inline,
         onTextLayout = { layout = it; onTextLayout(it) },

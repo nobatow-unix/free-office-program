@@ -114,6 +114,36 @@ private val IcqShapes = Shapes(
     large = RoundedCornerShape(20.dp),
 )
 
+/** Rubik (SIL OFL): a round, friendly font with Cyrillic; one variable file for all weights. */
+@OptIn(androidx.compose.ui.text.ExperimentalTextApi::class)
+private fun rubik(w: Int) = androidx.compose.ui.text.font.Font(
+    com.icqnew.app.R.font.rubik,
+    weight = androidx.compose.ui.text.font.FontWeight(w),
+    variationSettings = androidx.compose.ui.text.font.FontVariation.Settings(androidx.compose.ui.text.font.FontVariation.weight(w)),
+)
+
+val Rubik = androidx.compose.ui.text.font.FontFamily(rubik(300), rubik(400), rubik(500), rubik(600), rubik(700), rubik(800))
+
+/** Big titles get a soft drop shadow, so the letters look slightly raised ("3D"). */
+private val Raised = androidx.compose.ui.graphics.Shadow(
+    color = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.28f),
+    offset = androidx.compose.ui.geometry.Offset(0f, 2.5f),
+    blurRadius = 4f,
+)
+
+val IcqTypography: androidx.compose.material3.Typography = androidx.compose.material3.Typography().let { t ->
+    fun androidx.compose.ui.text.TextStyle.r() = copy(fontFamily = Rubik)
+    fun androidx.compose.ui.text.TextStyle.r3d() = copy(fontFamily = Rubik, shadow = Raised)
+    t.copy(
+        displayLarge = t.displayLarge.r3d(), displayMedium = t.displayMedium.r3d(), displaySmall = t.displaySmall.r3d(),
+        headlineLarge = t.headlineLarge.r3d(), headlineMedium = t.headlineMedium.r3d(), headlineSmall = t.headlineSmall.r3d(),
+        titleLarge = t.titleLarge.r3d().copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold),
+        titleMedium = t.titleMedium.r(), titleSmall = t.titleSmall.r(),
+        bodyLarge = t.bodyLarge.r(), bodyMedium = t.bodyMedium.r(), bodySmall = t.bodySmall.r(),
+        labelLarge = t.labelLarge.r(), labelMedium = t.labelMedium.r(), labelSmall = t.labelSmall.r(),
+    )
+}
+
 @Composable
 fun IcqTheme(
     dark: Boolean = isSystemInDarkTheme(),
@@ -127,6 +157,7 @@ fun IcqTheme(
         MaterialTheme(
             colorScheme = if (dark) darkScheme(color) else lightScheme(color),
             shapes = IcqShapes,
+            typography = IcqTypography,
             content = content,
         )
     }

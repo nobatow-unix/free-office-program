@@ -145,6 +145,15 @@ interface ChatRepository {
     suspend fun openSaved(): Long
     suspend fun moderate(peer: Long, uin: Long, action: String, seconds: Long = 0)
     suspend fun searchChats(query: String): List<PublicChat>
+    suspend fun sendPoll(peer: Long, question: String, options: List<String>, multiple: Boolean, anonymous: Boolean)
+    suspend fun votePoll(message: ChatMessage, options: List<Int>): Result<Unit>
+    suspend fun pollVoters(message: ChatMessage): List<Pair<Int, User>>
+    /** Reports channel posts shown on screen and stores the fresh view counters. */
+    suspend fun reportViews(serverIds: List<Long>)
+    suspend fun groupLog(peer: Long): List<GroupLogEntry>
+    /** Latest posts of an open channel (preview before subscribing). */
+    suspend fun publicPosts(gid: Long): List<ChatMessage>
+    suspend fun groupStats(peer: Long, days: Int): GroupStats
     suspend fun previewChat(gid: Long): PublicChat?
     /** Joins a public group / channel, returns its peer key. */
     suspend fun joinChat(gid: Long): Long

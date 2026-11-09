@@ -130,6 +130,9 @@ data class MessageEntity(
     /** "uin:emoji;uin:emoji" */
     val reactions: String = "",
     val failReason: String? = null,
+    val views: Int = 0,
+    /** PollDto as JSON */
+    val poll: String? = null,
 )
 
 /** Result row of the chat-list query (peer + last message + unread count + local options). */
@@ -256,6 +259,9 @@ interface KvDao {
 
 @Dao
 interface MessageDao {
+    @Query("UPDATE messages SET views = :views WHERE serverId = :sid AND views < :views")
+    suspend fun setViews(sid: Long, views: Int)
+
     @Query("SELECT * FROM messages WHERE peerUin = :peer ORDER BY ts ASC, id ASC")
     fun observe(peer: Long): Flow<List<MessageEntity>>
 
@@ -349,7 +355,7 @@ interface MessageDao {
         ContactEntity::class, MessageEntity::class, MemberEntity::class, ChatPrefEntity::class, KvEntity::class,
         CallEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = false,
 )
 abstract class IcqDatabase : RoomDatabase() {
@@ -363,6 +369,13 @@ abstract class IcqDatabase : RoomDatabase() {
 
 
 /** 6 -> 7: members got @username (for @mentions). Keeps all messages on the phone. */
+val MIGRATION_7_8 = object : androidx.room.migration.Migration(7, 8) {
+    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE messages ADD COLUMN views INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE messages ADD COLUMN poll TEXT")
+    }
+}
+
 val MIGRATION_6_7 = object : androidx.room.migration.Migration(6, 7) {
     override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE members ADD COLUMN username TEXT")

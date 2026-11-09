@@ -1,5 +1,7 @@
 package com.icqnew.app.presentation.home
 
+import androidx.compose.ui.draw.scale
+
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -144,7 +146,7 @@ fun SettingsTab(
             Column(Modifier.weight(1f)) {
                 com.icqnew.app.presentation.components.NameLine(name, verified = session?.verified == true, fontSize = 19.sp)
                 Text(
-                    (session?.username?.takeIf { it.isNotBlank() }?.let { "@$it · " } ?: "") + "ID $uin",
+                    session?.username?.takeIf { it.isNotBlank() }?.let { "@$it" } ?: "Задайте имя пользователя",
                     color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp,
                 )
             }
@@ -474,16 +476,16 @@ private fun Section(title: String?, content: @Composable ColumnScope.() -> Unit)
         Text(
             title,
             fontSize = 13.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(start = 28.dp, top = 16.dp, bottom = 6.dp),
+            modifier = Modifier.padding(start = 26.dp, top = 12.dp, bottom = 4.dp),
         )
-    } else Spacer(Modifier.height(16.dp))
+    } else Spacer(Modifier.height(10.dp))
     Column(
         Modifier
             .padding(horizontal = 12.dp)
             .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(14.dp))
             .background(MaterialTheme.colorScheme.surface)
-            .padding(vertical = 4.dp),
+            .padding(vertical = 2.dp),
         content = content,
     )
 }
@@ -501,16 +503,16 @@ private fun Line(
         Modifier
             .fillMaxWidth()
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .padding(horizontal = 16.dp, vertical = 13.dp),
+            .padding(horizontal = 14.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, null, Modifier.size(24.dp), tint = tint ?: MaterialTheme.colorScheme.primary)
-        Spacer(Modifier.width(16.dp))
-        Text(title, Modifier.weight(1f), color = tint ?: MaterialTheme.colorScheme.onSurface, fontSize = 16.sp)
-        if (value != null) Text(value, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp, maxLines = 1)
+        Icon(icon, null, Modifier.size(21.dp), tint = tint ?: MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.width(14.dp))
+        Text(title, Modifier.weight(1f), color = tint ?: MaterialTheme.colorScheme.onSurface, fontSize = 15.sp)
+        if (value != null) Text(value, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, maxLines = 1)
         if (arrow) Icon(
             Icons.AutoMirrored.Filled.KeyboardArrowRight, null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f), modifier = Modifier.size(20.dp),
         )
     }
 }
@@ -518,16 +520,16 @@ private fun Line(
 @Composable
 private fun Toggle(icon: ImageVector, title: String, hint: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clickable { onChange(!checked) }.padding(horizontal = 16.dp, vertical = 10.dp),
+        Modifier.fillMaxWidth().clickable { onChange(!checked) }.padding(horizontal = 14.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, null, Modifier.size(24.dp), tint = MaterialTheme.colorScheme.primary)
-        Spacer(Modifier.width(16.dp))
+        Icon(icon, null, Modifier.size(21.dp), tint = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, fontSize = 16.sp)
-            Text(hint, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(title, fontSize = 15.sp)
+            Text(hint, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 15.sp)
         }
-        Switch(checked = checked, onCheckedChange = onChange)
+        Switch(checked = checked, onCheckedChange = onChange, modifier = Modifier.scale(0.8f))
     }
 }
 

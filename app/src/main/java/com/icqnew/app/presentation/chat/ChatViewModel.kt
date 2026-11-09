@@ -294,6 +294,25 @@ class ChatViewModel(
 
     // ---- message actions ------------------------------------------------------
 
+    fun sendPoll(question: String, options: List<String>, multiple: Boolean, anonymous: Boolean) {
+        viewModelScope.launch { repo.sendPoll(peerUin, question, options, multiple, anonymous) }
+    }
+
+    fun vote(m: ChatMessage, options: List<Int>) {
+        viewModelScope.launch {
+            repo.votePoll(m, options).onFailure { _toast.value = it.message ?: "Не удалось проголосовать" }
+        }
+    }
+
+    private val reportedViews = HashSet<Long>()
+
+    /** Channel posts that were on screen: counted once per opening of the chat. */
+    fun reportViews(ids: List<Long>) {
+        val fresh = ids.filter { reportedViews.add(it) }
+        if (fresh.isEmpty()) return
+        viewModelScope.launch { repo.reportViews(fresh) }
+    }
+
     fun react(m: ChatMessage, emoji: String) {
         viewModelScope.launch {
             if (!repo.react(m, emoji)) _toast.value = "Нет соединения с сервером"
@@ -358,7 +377,19 @@ class ChatViewModel(
 
     // ---- media -------------------------------------------------------------------
 
+    /**
+     * Voice messages that follow each other are played one after another (like Telegram):
+     * when one ends, the next message — if it is a voice message too — starts by itself.
+     */
+    private val playNext: (Long) -> Unit = { doneId ->
+        val list = messages.value.filter { it.kind != MessageKind.SYSTEM }
+        val i = list.indexOfFirst { it.id == doneId }
+        val next = if (i >= 0) list.getOrNull(i + 1) else null
+        if (next != null && next.kind == MessageKind.VOICE && !next.deleted) playVoice(next)
+    }
+
     fun playVoice(m: ChatMessage) {
+        player.onFinished = playNext
         player.toggle(m.id, m.attId, m.localPath, m.attName ?: "voice.m4a")
     }
 
@@ -400,6 +431,7 @@ class ChatViewModel(
     }
 
     override fun onCleared() {
+        if (player.onFinished === playNext) player.onFinished = null
         repo.setActiveChat(null)
         recorder.cancel()
     }

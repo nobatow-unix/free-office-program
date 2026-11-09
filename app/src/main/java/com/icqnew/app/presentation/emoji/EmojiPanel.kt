@@ -121,7 +121,7 @@ fun EmojiPanel(
                 item {
                     // country flags (drawn by the phone's emoji font)
                     TabButton(selected = tab == FLAGS_TAB, onClick = { tab = FLAGS_TAB }) {
-                        Text("🇹🇲", fontSize = 20.sp)
+                        EmojiImage("🇹🇲", 24.dp)
                     }
                 }
                 itemsIndexed(categories) { i, cat ->
@@ -165,7 +165,7 @@ fun EmojiPanel(
                     Box(
                         Modifier.aspectRatio(1f).clip(CircleShape).clickable { pick(f) },
                         contentAlignment = Alignment.Center,
-                    ) { Text(f, fontSize = 26.sp) }
+                    ) { EmojiImage(f, 30.dp) }
                 }
             }
             else -> {

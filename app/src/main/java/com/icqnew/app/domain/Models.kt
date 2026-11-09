@@ -56,7 +56,7 @@ enum class MessageStatus { SENDING, SENT, READ, FAILED }
 
 enum class MessageKind(val wire: String) {
     TEXT("text"), STICKER("sticker"), IMAGE("image"), FILE("file"), VOICE("voice"), SYSTEM("system"), BOT("bot"),
-    VIDEO_NOTE("video_note");
+    VIDEO_NOTE("video_note"), POLL("poll");
 
     val isAttachment: Boolean get() = this == IMAGE || this == FILE || this == VOICE || this == VIDEO_NOTE
 
@@ -89,6 +89,33 @@ data class ChatMessage(
     val fwdName: String? = null,
     val reactions: List<Reaction> = emptyList(),
     val failReason: String? = null,
+    /** channel posts: how many people saw it */
+    val views: Int = 0,
+    val poll: Poll? = null,
+)
+
+data class PollOption(val text: String, val votes: Int)
+
+data class Poll(
+    val options: List<PollOption>,
+    val voters: Int,
+    val multiple: Boolean,
+    val anonymous: Boolean,
+    val closed: Boolean,
+    val my: List<Int>,
+) {
+    val voted: Boolean get() = my.isNotEmpty()
+}
+
+data class GroupLogEntry(val action: String, val ts: Long, val user: User, val actor: User?)
+
+data class StatDay(val day: Long, val joined: Int, val left: Int, val views: Int)
+data class StatPost(val id: Long, val text: String, val kind: String, val ts: Long, val views: Int, val reactions: Int)
+
+data class GroupStats(
+    val members: Int, val views: Int, val reactions: Int, val avgViews: Int,
+    val joined: Int, val left: Int,
+    val series: List<StatDay>, val posts: List<StatPost>, val topReactions: List<Pair<String, Int>>,
 )
 
 /** One row of the chat list: peer + last message + unread counter. */

@@ -45,7 +45,7 @@ DB_PATH = os.environ.get("ICQ_DB", "icq_v2.db")
 AVATAR_DIR = os.environ.get("ICQ_AVATARS", "avatars")
 UPLOAD_DIR = os.environ.get("ICQ_UPLOADS", "uploads")
 MAX_UPLOAD = 4 * 1024 * 1024 * 1024  # 4 GB
-KINDS = ("text", "sticker", "image", "file", "voice", "video_note")
+KINDS = ("text", "sticker", "image", "file", "voice", "video_note", "poll")
 GROUP_DEFAULTS = {
     "only_admins_add": False,   # only admins may add members
     "slow_mode": 0,             # seconds between messages for ordinary members
@@ -259,6 +259,16 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS qr_logins(code TEXT PRIMARY KEY, created INTEGER NOT NULL,
                 token TEXT, uin INTEGER);
             CREATE TABLE IF NOT EXISTS link_cache(url TEXT PRIMARY KEY, data TEXT NOT NULL, ts INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS post_views(msg_id INTEGER NOT NULL, uin INTEGER NOT NULL, ts INTEGER NOT NULL,
+                PRIMARY KEY(msg_id, uin));
+            CREATE INDEX IF NOT EXISTS idx_views_ts ON post_views(ts);
+            CREATE TABLE IF NOT EXISTS polls(msg_id INTEGER PRIMARY KEY, options TEXT NOT NULL,
+                multiple INTEGER NOT NULL DEFAULT 0, anonymous INTEGER NOT NULL DEFAULT 1, closed INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS poll_votes(msg_id INTEGER NOT NULL, uin INTEGER NOT NULL, opt INTEGER NOT NULL,
+                ts INTEGER NOT NULL, PRIMARY KEY(msg_id, uin, opt));
+            CREATE TABLE IF NOT EXISTS group_log(id INTEGER PRIMARY KEY AUTOINCREMENT, gid INTEGER NOT NULL,
+                uin INTEGER NOT NULL, actor INTEGER NOT NULL DEFAULT 0, action TEXT NOT NULL, ts INTEGER NOT NULL);
+            CREATE INDEX IF NOT EXISTS idx_glog ON group_log(gid, ts);
             CREATE INDEX IF NOT EXISTS idx_msg_expire ON messages(expire_at);
             CREATE INDEX IF NOT EXISTS idx_msg_ts ON messages(ts);
             """
@@ -498,7 +508,46 @@ def reactions_of(c: sqlite3.Connection, msg_id: int) -> list:
     return [{"uin": r["uin"], "emoji": r["emoji"]} for r in rows]
 
 
-def msg_json(c: sqlite3.Connection, row: sqlite3.Row) -> dict:
+def poll_json(c: sqlite3.Connection, mid: int, viewer: int = 0) -> Optional[dict]:
+    p = c.execute("SELECT * FROM polls WHERE msg_id=?", (mid,)).fetchone()
+    if not p:
+        return None
+    opts = json.loads(p["options"])
+    counts = [0] * len(opts)
+    for r in c.execute("SELECT opt, COUNT(*) AS n FROM poll_votes WHERE msg_id=? GROUP BY opt", (mid,)):
+        if 0 <= r["opt"] < len(counts):
+            counts[r["opt"]] = r["n"]
+    voters = c.execute("SELECT COUNT(DISTINCT uin) AS n FROM poll_votes WHERE msg_id=?", (mid,)).fetchone()["n"]
+    d = {
+        "options": [{"text": t, "votes": counts[i]} for i, t in enumerate(opts)],
+        "voters": voters, "multiple": bool(p["multiple"]), "anonymous": bool(p["anonymous"]),
+        "closed": bool(p["closed"]),
+    }
+    if viewer:
+        d["my"] = [r["opt"] for r in c.execute("SELECT opt FROM poll_votes WHERE msg_id=? AND uin=?", (mid, viewer))]
+    return d
+
+
+def views_of(c: sqlite3.Connection, row: sqlite3.Row) -> int:
+    if not row["group_id"]:
+        return 0
+    return c.execute("SELECT COUNT(*) AS n FROM post_views WHERE msg_id=?", (row["id"],)).fetchone()["n"]
+
+
+def log_group(c: sqlite3.Connection, gid: int, uin: int, action: str, actor: int = 0) -> None:
+    """Channel / group 'recent actions' log (join, leave, kick, ban)."""
+    c.execute("INSERT INTO group_log(gid, uin, actor, action, ts) VALUES(?,?,?,?,?)", (gid, uin, actor, action, now_ms()))
+
+
+def msg_json(c: sqlite3.Connection, row: sqlite3.Row, viewer: int = 0) -> dict:
+    d = _msg_json(c, row)
+    d["views"] = views_of(c, row)
+    if row["kind"] == "poll":
+        d["poll"] = poll_json(c, row["id"], viewer)
+    return d
+
+
+def _msg_json(c: sqlite3.Connection, row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
         "client_id": row["client_id"],
@@ -1405,7 +1454,7 @@ def updates(rev: int = 0, limit: int = 500, authorization: Optional[str] = Heade
             f"SELECT m.* FROM messages m WHERE m.rev>:r AND {visible_clause()} ORDER BY m.rev LIMIT :l",
             {"r": rev, "u": uin, "l": limit},
         ).fetchall()
-        items = [msg_json(c, r) for r in rows]
+        items = [msg_json(c, r, uin) for r in rows]
         top = c.execute("SELECT v FROM meta WHERE k='rev'").fetchone()["v"]
         last = items[-1]["rev"] if items else top
         until = last if len(items) == limit else max(last, top)
@@ -1427,7 +1476,7 @@ def messages(after: int = 0, authorization: Optional[str] = Header(None)) -> lis
             f"SELECT m.* FROM messages m WHERE m.id>:a AND {visible_clause()} ORDER BY m.id LIMIT 5000",
             {"a": after, "u": uin},
         ).fetchall()
-        return [msg_json(c, r) for r in rows]
+        return [msg_json(c, r, uin) for r in rows]
 
 
 @app.get("/api/read_marks")
@@ -1781,10 +1830,11 @@ def search_chats(q: str = Query(""), authorization: Optional[str] = Header(None)
                 " ORDER BY g.verified DESC, n DESC LIMIT 50",
                 (like, like, like),
             ).fetchall()
-        else:  # popular public chats
+        else:  # verified channels first, then popular public chats
             rows = c.execute(
                 "SELECT g.*, (SELECT COUNT(*) FROM group_members m WHERE m.gid=g.id) AS n FROM groups g"
-                " WHERE g.public=1 ORDER BY n DESC LIMIT 30"
+                " WHERE g.public=1 OR g.verified=1 OR g.username IS NOT NULL"
+                " ORDER BY g.verified DESC, CASE g.kind WHEN 'channel' THEN 0 ELSE 1 END, n DESC LIMIT 40"
             ).fetchall()
         out = []
         for g in rows:
@@ -1792,6 +1842,161 @@ def search_chats(q: str = Query(""), authorization: Optional[str] = Header(None)
             d["member"] = is_member(c, g["id"], uin)
             out.append(d)
         return out
+
+
+class ViewsIn(BaseModel):
+    ids: List[int] = []
+
+
+@app.post("/api/messages/views")
+def post_views(body: ViewsIn, authorization: Optional[str] = Header(None)) -> dict:
+    """The phone reports channel posts it showed; returns fresh view counters."""
+    uin = require_uin(authorization)
+    out = {}
+    now = now_ms()
+    with conn() as c:
+        for mid in list(dict.fromkeys(body.ids))[:200]:
+            r = c.execute(
+                "SELECT m.id, m.group_id, m.from_uin, g.kind FROM messages m JOIN groups g ON g.id=m.group_id"
+                " WHERE m.id=?", (mid,),
+            ).fetchone()
+            if not r or r["kind"] != "channel" or not is_member(c, r["group_id"], uin):
+                continue
+            c.execute("INSERT OR IGNORE INTO post_views(msg_id, uin, ts) VALUES(?,?,?)", (mid, uin, now))
+            out[str(mid)] = c.execute("SELECT COUNT(*) AS n FROM post_views WHERE msg_id=?", (mid,)).fetchone()["n"]
+    return out
+
+
+class VoteIn(BaseModel):
+    options: List[int] = []
+
+
+@app.post("/api/polls/{mid}/vote")
+async def poll_vote(mid: int, body: VoteIn, authorization: Optional[str] = Header(None)) -> dict:
+    """Vote (or retract with an empty list). Returns the message with my choice."""
+    uin = require_uin(authorization)
+    with conn() as c:
+        r = c.execute("SELECT * FROM messages WHERE id=? AND kind='poll'", (mid,)).fetchone()
+        p = c.execute("SELECT * FROM polls WHERE msg_id=?", (mid,)).fetchone()
+        if not r or not p:
+            raise HTTPException(404, "Опрос не найден")
+        if r["group_id"]:
+            if not is_member(c, r["group_id"], uin):
+                raise HTTPException(403, "Вы не участник этого чата")
+        elif uin not in (r["from_uin"], r["to_uin"]):
+            raise HTTPException(403, "Нет доступа")
+        if p["closed"]:
+            raise HTTPException(400, "Опрос завершён")
+        n = len(json.loads(p["options"]))
+        opts = sorted({o for o in body.options if 0 <= o < n})
+        if not p["multiple"]:
+            opts = opts[:1]
+        c.execute("DELETE FROM poll_votes WHERE msg_id=? AND uin=?", (mid, uin))
+        now = now_ms()
+        for o in opts:
+            c.execute("INSERT INTO poll_votes(msg_id, uin, opt, ts) VALUES(?,?,?,?)", (mid, uin, o, now))
+        c.execute("UPDATE messages SET rev=? WHERE id=?", (next_rev(c), mid))
+        targets, payload = build_update(c, mid)
+        mine = msg_json(c, c.execute("SELECT * FROM messages WHERE id=?", (mid,)).fetchone(), uin)
+    await manager.send_many([t for t in targets if t != uin], payload)
+    return mine
+
+
+@app.get("/api/polls/{mid}/voters")
+def poll_voters(mid: int, authorization: Optional[str] = Header(None)) -> list:
+    uin = require_uin(authorization)
+    with conn() as c:
+        r = c.execute("SELECT * FROM messages WHERE id=? AND kind='poll'", (mid,)).fetchone()
+        p = c.execute("SELECT * FROM polls WHERE msg_id=?", (mid,)).fetchone()
+        if not r or not p or p["anonymous"]:
+            raise HTTPException(404, "Голоса скрыты")
+        if r["group_id"] and not is_member(c, r["group_id"], uin):
+            raise HTTPException(403, "Нет доступа")
+        rows = c.execute(
+            "SELECT v.opt, u.* FROM poll_votes v JOIN users u ON u.uin=v.uin WHERE v.msg_id=? ORDER BY v.ts", (mid,)
+        ).fetchall()
+        return [{"opt": x["opt"], "user": user_json(x, c=c)} for x in rows]
+
+
+@app.get("/api/groups/{gid}/posts")
+def public_posts(gid: int, limit: int = Query(5), authorization: Optional[str] = Header(None)) -> list:
+    """Latest posts of an open channel / group: shown before subscribing."""
+    uin = require_uin(authorization)
+    with conn() as c:
+        g = c.execute("SELECT * FROM groups WHERE id=?", (gid,)).fetchone()
+        if not g or not (g["public"] or g["username"] or is_member(c, gid, uin)):
+            raise HTTPException(404, "Чат не найден")
+        rows = c.execute(
+            "SELECT * FROM messages WHERE group_id=? AND deleted=0 AND kind NOT IN ('system','gone')"
+            " ORDER BY id DESC LIMIT ?", (gid, max(1, min(limit, 20))),
+        ).fetchall()
+        return [msg_json(c, r, uin) for r in rows]
+
+
+@app.get("/api/groups/{gid}/log")
+def group_log_endpoint(gid: int, authorization: Optional[str] = Header(None)) -> list:
+    """Recent actions: who subscribed, who left, who was removed (admins only)."""
+    uin = require_uin(authorization)
+    with conn() as c:
+        require_group_admin(c, gid, uin)
+        rows = c.execute(
+            "SELECT l.*, u.uin AS u_uin FROM group_log l LEFT JOIN users u ON u.uin=l.uin"
+            " WHERE l.gid=? ORDER BY l.ts DESC LIMIT 200", (gid,),
+        ).fetchall()
+        out = []
+        for r in rows:
+            u = c.execute("SELECT * FROM users WHERE uin=?", (r["uin"],)).fetchone()
+            a = c.execute("SELECT * FROM users WHERE uin=?", (r["actor"],)).fetchone() if r["actor"] else None
+            out.append({
+                "action": r["action"], "ts": r["ts"],
+                "user": user_json(u, c=c) if u else {"uin": r["uin"], "name": "Удалённый аккаунт"},
+                "actor": user_json(a, c=c) if a else None,
+            })
+        return out
+
+
+@app.get("/api/groups/{gid}/stats")
+def group_stats(gid: int, days: int = Query(14), authorization: Optional[str] = Header(None)) -> dict:
+    """Channel statistics: subscribers, growth, views, reactions, best posts."""
+    uin = require_uin(authorization)
+    days = max(1, min(days, 60))
+    with conn() as c:
+        require_group_admin(c, gid, uin)
+        day = 86_400_000
+        now = now_ms()
+        start = (now // day - days + 1) * day
+        members = c.execute("SELECT COUNT(*) AS n FROM group_members WHERE gid=?", (gid,)).fetchone()["n"]
+        series = []
+        for i in range(days):
+            a, b = start + i * day, start + (i + 1) * day
+            j = c.execute("SELECT COUNT(*) AS n FROM group_log WHERE gid=? AND action IN ('join','added') AND ts>=? AND ts<?",
+                          (gid, a, b)).fetchone()["n"]
+            l = c.execute("SELECT COUNT(*) AS n FROM group_log WHERE gid=? AND action IN ('leave','kick','ban') AND ts>=? AND ts<?",
+                          (gid, a, b)).fetchone()["n"]
+            v = c.execute("SELECT COUNT(*) AS n FROM post_views pv JOIN messages m ON m.id=pv.msg_id"
+                          " WHERE m.group_id=? AND pv.ts>=? AND pv.ts<?", (gid, a, b)).fetchone()["n"]
+            series.append({"day": a, "joined": j, "left": l, "views": v})
+        posts = c.execute(
+            "SELECT m.*, (SELECT COUNT(*) FROM post_views pv WHERE pv.msg_id=m.id) AS v,"
+            " (SELECT COUNT(*) FROM reactions r WHERE r.msg_id=m.id) AS rc FROM messages m"
+            " WHERE m.group_id=? AND m.deleted=0 AND m.kind NOT IN ('system','bot','gone') ORDER BY m.id DESC LIMIT 30",
+            (gid,),
+        ).fetchall()
+        recent = [{"id": p["id"], "text": p["text"][:120], "kind": p["kind"], "ts": p["ts"], "views": p["v"],
+                   "reactions": p["rc"]} for p in posts]
+        total_views = c.execute("SELECT COUNT(*) AS n FROM post_views pv JOIN messages m ON m.id=pv.msg_id WHERE m.group_id=?",
+                                (gid,)).fetchone()["n"]
+        total_reacts = c.execute("SELECT COUNT(*) AS n FROM reactions r JOIN messages m ON m.id=r.msg_id WHERE m.group_id=?",
+                                 (gid,)).fetchone()["n"]
+        top_r = c.execute("SELECT r.emoji, COUNT(*) AS n FROM reactions r JOIN messages m ON m.id=r.msg_id"
+                          " WHERE m.group_id=? GROUP BY r.emoji ORDER BY n DESC LIMIT 8", (gid,)).fetchall()
+        avg = round(sum(p["views"] for p in recent) / len(recent)) if recent else 0
+        return {
+            "members": members, "views": total_views, "reactions": total_reacts, "avg_views": avg,
+            "joined": sum(x["joined"] for x in series), "left": sum(x["left"] for x in series),
+            "series": series, "posts": recent,
+            "top_reactions": [{"emoji": r["emoji"], "count": r["n"]} for r in top_r],
+        }
 
 
 @app.post("/api/groups")
@@ -1885,6 +2090,7 @@ async def add_members(gid: int, body: GroupAddIn, authorization: Optional[str] =
                     continue
                 c.execute("DELETE FROM group_bans WHERE gid=? AND uin=?", (gid, m))
             c.execute("INSERT INTO group_members(gid, uin, joined) VALUES(?,?,?)", (gid, m, now))
+            log_group(c, gid, m, "added", uin)
             count += 1
             if g["kind"] != "channel":
                 sys_rows.append(insert_system(c, gid, uin, f"{uname(c, uin)} добавил(а) {uname(c, m)}"))
@@ -1907,6 +2113,7 @@ async def join_group(gid: int, authorization: Optional[str] = Header(None)) -> d
             raise HTTPException(403, "Вы заблокированы в этом чате")
         if not is_member(c, gid, uin):
             c.execute("INSERT INTO group_members(gid, uin, joined) VALUES(?,?,?)", (gid, uin, now_ms()))
+            log_group(c, gid, uin, "join")
             if g["kind"] != "channel":
                 sys_rows.append(insert_system(c, gid, uin, f"{uname(c, uin)} присоединился(-ась) к группе"))
                 if group_settings(g)["welcome"]:
@@ -1924,6 +2131,7 @@ async def leave_group(gid: int, who: int, actor: int, system_text: str, deleted_
             return
         name = uname(c, who) if not deleted_user else "Пользователь"
         c.execute("DELETE FROM group_members WHERE gid=? AND uin=?", (gid, who))
+        log_group(c, gid, who, "leave" if actor == who else "kick", actor)
         left = group_members(c, gid)
         if not left:  # last member left: remove the chat completely
             c.execute("DELETE FROM reactions WHERE msg_id IN (SELECT id FROM messages WHERE group_id=?)", (gid,))
@@ -2368,6 +2576,9 @@ def cleanup_storage() -> dict:
         c.execute("DELETE FROM story_views WHERE story NOT IN (SELECT id FROM stories)")
         c.execute("DELETE FROM story_comments WHERE story NOT IN (SELECT id FROM stories)")
         c.execute("DELETE FROM reactions WHERE msg_id NOT IN (SELECT id FROM messages)")
+        for t in ("post_views", "poll_votes", "polls"):
+            c.execute(f"DELETE FROM {t} WHERE msg_id NOT IN (SELECT id FROM messages)")
+        c.execute("DELETE FROM group_log WHERE ts<? OR gid NOT IN (SELECT id FROM groups)", (now_ms() - 90 * 86_400_000,))
     c2 = sqlite3.connect(DB_PATH, timeout=30)
     try:
         c2.execute("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -2468,6 +2679,7 @@ async def moderate_api(gid: int, actor: int, target: int, action: str, seconds: 
     if action in ("ban", "kick"):
         with conn() as c:
             c.execute("DELETE FROM group_members WHERE gid=? AND uin=?", (gid, target))
+            log_group(c, gid, target, action, actor)
             sys_row = None if is_channel else insert_bot(
                 c, gid, ("⛔ " if action == "ban" else "👋 ") + f"{actor_name} {verb} {target_name}"
             )
@@ -2936,6 +3148,7 @@ async def handle_message(sender: int, ws: WebSocket, data: dict) -> None:
     fwd_name = (str(data.get("fwd_name"))[:60] if data.get("fwd_name") else None)
     att_id = att_name = att_mime = None
     att_size = att_dur = 0
+    poll_cfg = None
     with conn() as c:
         existing = c.execute(
             "SELECT * FROM messages WHERE from_uin=? AND client_id=?", (sender, client_id)
@@ -3004,6 +3217,13 @@ async def handle_message(sender: int, ws: WebSocket, data: dict) -> None:
                 await fail(ws, client_id, "Файл недоступен")
                 return
             att_id, att_name, att_mime, att_size, att_dur = f["id"], f["name"], f["mime"], f["size"], f["dur"]
+        elif kind == "poll":
+            raw = data.get("poll") or {}
+            opts = [str(o).strip()[:100] for o in (raw.get("options") or []) if str(o).strip()][:10]
+            if not text or len(opts) < 2:
+                await fail(ws, client_id, "В опросе нужен вопрос и минимум 2 варианта")
+                return
+            poll_cfg = (opts, bool(raw.get("multiple")), raw.get("anonymous", True) is not False)
         elif not text:
             return
         if cmd_args is not None:
@@ -3026,6 +3246,9 @@ async def handle_message(sender: int, ws: WebSocket, data: dict) -> None:
             (client_id, sender, to, text, ts, kind, att_id, att_name, att_size, att_mime, att_dur,
              gid, reply_to, fwd_name, next_rev(c), ts + ttl * 1000 if ttl else 0),
         )
+        if kind == "poll":
+            c.execute("INSERT INTO polls(msg_id, options, multiple, anonymous) VALUES(?,?,?,?)",
+                      (cur.lastrowid, json.dumps(poll_cfg[0], ensure_ascii=False), int(poll_cfg[1]), int(poll_cfg[2])))
         if gid is None and to != sender:
             c.execute("INSERT OR IGNORE INTO contacts(owner, contact) VALUES(?,?)", (sender, to))
             c.execute("INSERT OR IGNORE INTO contacts(owner, contact) VALUES(?,?)", (to, sender))
@@ -3070,12 +3293,18 @@ async def handle_delete(uin: int, data: dict) -> None:
             gid = r["group_id"]
             if not gid or not is_admin(c, gid, uin) or role_of(c, gid, r["from_uin"]) == "owner":
                 return
+        gone = False
+        if r["group_id"]:
+            gk = c.execute("SELECT kind FROM groups WHERE id=?", (r["group_id"],)).fetchone()
+            gone = bool(gk and gk["kind"] == "channel")  # channel posts vanish without "message deleted"
         c.execute(
-            "UPDATE messages SET text='', deleted=1, kind='text', att_id=NULL, att_name=NULL, att_size=0,"
+            "UPDATE messages SET text='', deleted=1, kind=?, att_id=NULL, att_name=NULL, att_size=0,"
             " att_mime=NULL, att_dur=0, rev=? WHERE id=?",
-            (next_rev(c), mid),
+            ("gone" if gone else "text", next_rev(c), mid),
         )
         c.execute("DELETE FROM reactions WHERE msg_id=?", (mid,))
+        c.execute("DELETE FROM poll_votes WHERE msg_id=?", (mid,))
+        c.execute("DELETE FROM polls WHERE msg_id=?", (mid,))
         targets, payload = build_update(c, mid)
     await manager.send_many(targets, payload)
 
@@ -3159,7 +3388,7 @@ async def handle_typing(uin: int, data: dict) -> None:
 # ------------------------------------------------------------------ ICQ bot
 BOT_HELP = (
     "Я — ICQ Бот 🤖\n\n"
-    "/id — ваш ID\n"
+    "/id — ваш ID (/id @имя — чужой)\n"
     "/me — ваш профиль\n"
     "/username — как получить @имя\n"
     "/groups — как создать группу или канал\n"
@@ -3179,7 +3408,16 @@ def bot_text_for(c: sqlite3.Connection, uin: int, text: str, kind: str) -> str:
     if low in ("/help", "help", "помощь", "?"):
         return BOT_HELP
     if low == "/id":
-        return f"🆔 Ваш ID: {uin}"
+        return f"🆔 Ваш ID: {uin}\n\nЧужой ID: /id @имя"
+    if low.startswith("/id ") or (low.startswith("@") and " " not in low):
+        name = t.split(None, 1)[-1].strip().lstrip("@")
+        x = c.execute("SELECT uin, name FROM users WHERE username=? COLLATE NOCASE AND banned=0", (name,)).fetchone()
+        g = None if x else c.execute("SELECT id, name, kind FROM groups WHERE username=? COLLATE NOCASE", (name,)).fetchone()
+        if x:
+            return f"🆔 {x['name']} (@{name}): {x['uin']}"
+        if g:
+            return f"🆔 {'Канал' if g['kind'] == 'channel' else 'Группа'} «{g['name']}» (@{name}): {g['id']}"
+        return f"Не нашёл @{name} 🤷"
     if low == "/me":
         return (
             f"👤 {u['name']}{' ✔' if u['verified'] else ''}\n"

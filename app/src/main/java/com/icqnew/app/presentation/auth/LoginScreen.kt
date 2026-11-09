@@ -84,7 +84,7 @@ fun LoginScreen(onAuthenticated: () -> Unit) {
                             contentPadding = PaddingValues(horizontal = 12.dp),
                             modifier = Modifier.height(56.dp),
                         ) {
-                            Text(country?.flag ?: "🌐", fontSize = 22.sp)
+                            com.icqnew.app.presentation.emoji.EmojiImage(country?.flag ?: "🌐", 24.dp)
                             Spacer(Modifier.width(6.dp))
                             Text(country?.code ?: "+…", fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface)
                             Icon(Icons.Filled.ArrowDropDown, null)
@@ -232,7 +232,7 @@ private fun CountryPicker(onPick: (Country) -> Unit, onDismiss: () -> Unit) {
                             .padding(horizontal = 8.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(c.flag, fontSize = 24.sp)
+                        com.icqnew.app.presentation.emoji.EmojiImage(c.flag, 28.dp)
                         Spacer(Modifier.width(14.dp))
                         Text(c.name, modifier = Modifier.weight(1f), fontSize = 16.sp)
                         Text(c.code, color = MaterialTheme.colorScheme.primary, fontSize = 15.sp)

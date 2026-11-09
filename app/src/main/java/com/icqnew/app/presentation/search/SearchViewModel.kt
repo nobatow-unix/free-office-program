@@ -53,9 +53,11 @@ class SearchViewModel(
             query.debounce(350).distinctUntilChanged().collectLatest { q ->
                 if (q.isBlank() && !channelsOnly) {
                     _state.update {
-                        it.copy(people = emptyList(), publicChats = emptyList(), messages = emptyList(),
-                            loading = false, searched = false, error = null)
+                        it.copy(people = emptyList(), messages = emptyList(), loading = false, searched = false, error = null)
                     }
+                    // empty search: verified (blue tick) channels, like Telegram's suggestions
+                    val verified = runCatching { chats.searchChats("") }.getOrDefault(emptyList()).filter { it.verified }
+                    _state.update { it.copy(publicChats = verified) }
                     return@collectLatest
                 }
                 _state.update { it.copy(loading = true, error = null) }

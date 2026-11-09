@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.*
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,6 +48,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.icqnew.app.domain.StoryGroup
 import com.icqnew.app.presentation.appContainer
+import com.icqnew.app.presentation.components.usernameCopy
 import com.icqnew.app.presentation.components.Avatar
 import com.icqnew.app.presentation.components.IcqIcons
 import com.icqnew.app.presentation.components.NameLine
@@ -111,14 +113,14 @@ fun MyProfileTab(
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Box(
-                    Modifier.size(118.dp).clip(CircleShape)
+                    Modifier.size(100.dp).clip(CircleShape)
                         .then(if (myIndex >= 0) Modifier.border(3.dp, com.icqnew.app.presentation.theme.IcqGreen, CircleShape) else Modifier)
                         .clickable { if (myIndex >= 0) onOpenStory(myIndex) else onPickAvatar() }
                         .padding(if (myIndex >= 0) 6.dp else 0.dp),
                     contentAlignment = Alignment.Center,
-                ) { Avatar(s.name, s.uin, s.avatarUrl, false, 106.dp, storyRing = false) }
-                Spacer(Modifier.height(12.dp))
-                NameLine(s.name, verified = s.verified, fontSize = 24.sp)
+                ) { Avatar(s.name, s.uin, s.avatarUrl, false, 90.dp, storyRing = false) }
+                Spacer(Modifier.height(8.dp))
+                NameLine(s.name, verified = s.verified, fontSize = 22.sp)
                 Text(
                     "в сети", color = MaterialTheme.colorScheme.primary, fontSize = 14.sp,
                 )
@@ -138,24 +140,26 @@ fun MyProfileTab(
         // ---- info card ----
         Card(
             Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-            shape = RoundedCornerShape(22.dp),
+            shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
         ) {
-            s.username?.takeIf { it.isNotBlank() }?.let {
-                InfoRow("@$it", "Имя пользователя") { copy(context, "@$it", "Имя скопировано") }
-            }
-            InfoRow(s.uin.toString(), "ID") { copy(context, s.uin.toString(), "ID скопирован") }
-            s.about.takeIf { it.isNotBlank() }?.let { InfoRow(it, "О себе") }
-            profile?.birthday?.takeIf { it.isNotBlank() }?.let { InfoRow("🎂 " + it, "День рождения") }
             profile?.takeIf { it.channelId != 0L }?.let { p ->
                 ListItem(
                     modifier = Modifier.clickable { onOpenChat(-p.channelId) },
                     colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                    leadingContent = { Avatar(p.channelName, -p.channelId, p.channelAvatar, false, 40.dp, isChannel = true) },
-                    headlineContent = { EmojiText(p.channelName, maxLines = 1) },
+                    leadingContent = { Avatar(p.channelName, -p.channelId, p.channelAvatar, false, 44.dp, isChannel = true) },
+                    headlineContent = { EmojiText(p.channelName, maxLines = 1, fontSize = 17.sp) },
                     supportingContent = { Text("Мой канал", color = MaterialTheme.colorScheme.onSurfaceVariant) },
                 )
+                HorizontalDivider(Modifier.padding(horizontal = 16.dp))
             }
+            s.username?.takeIf { it.isNotBlank() }?.let {
+                Box(Modifier.usernameCopy(it, com.icqnew.app.presentation.IcqLinks.user(it))) {
+                    InfoRow("@$it", "Имя пользователя · удерживайте — ссылка")
+                }
+            }
+            s.about.takeIf { it.isNotBlank() }?.let { InfoRow(it, "О себе") }
+            profile?.birthday?.takeIf { it.isNotBlank() }?.let { InfoRow("🎂 " + it, "День рождения") }
         }
 
         // ---- my stories ----
@@ -194,8 +198,8 @@ fun MyProfileTab(
 
         // ---- menu ----
         Card(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp),
-            shape = RoundedCornerShape(22.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
         ) {
             MenuRow(IcqIcons.Contacts, "Контакты", Color(0xFF65AADD)) { onOpen("contacts") }
@@ -203,20 +207,17 @@ fun MyProfileTab(
             MenuRow(Icons.Filled.QrCodeScanner, "Веб-версия (вход по QR)", Color(0xFFA695E7)) {
                 scanning = true
             }
-            MenuRow(IcqIcons.Channels, "Создать канал", Color(0xFFFAA774), onNewChannel)
-            MenuRow(Icons.Filled.Search, "Найти каналы", Color(0xFF6EC9CB), onFindChannels)
             MenuRow(Icons.Filled.Share, "Пригласить друзей", Color(0xFFEE7AAE)) {
                 val server = serverUrl
                 val send = Intent(Intent.ACTION_SEND).setType("text/plain")
                     .putExtra(
                         Intent.EXTRA_TEXT,
                         "Пиши мне в ICQ New! " +
-                            (s.username?.takeIf { it.isNotBlank() }?.let { com.icqnew.app.presentation.IcqLinks.user(it) } ?: "Мой ID: ${s.uin}") +
+                            (s.username?.takeIf { it.isNotBlank() }?.let { com.icqnew.app.presentation.IcqLinks.user(it) } ?: "Найди меня в ICQ New: ${s.name}") +
                             "\nСкачать: ${com.icqnew.app.presentation.IcqLinks.SITE}",
                     )
                 context.startActivity(Intent.createChooser(send, "Пригласить"))
             }
-            MenuRow(Icons.Filled.Settings, "Настройки", Color(0xFF8E8E93)) { onOpen("settings") }
         }
         Spacer(Modifier.height(90.dp))
     }
@@ -255,12 +256,12 @@ private fun copy(context: Context, text: String, toast: String) {
 private fun BigButton(icon: ImageVector, text: String, modifier: Modifier, onClick: () -> Unit) {
     Column(
         modifier.clip(RoundedCornerShape(18.dp)).background(MaterialTheme.colorScheme.surfaceContainer)
-            .clickable(onClick = onClick).padding(vertical = 12.dp),
+            .clickable(onClick = onClick).padding(vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Icon(icon, null, tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(26.dp))
-        Spacer(Modifier.height(4.dp))
-        Text(text, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+        Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(21.dp))
+        Spacer(Modifier.height(2.dp))
+        Text(text, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1)
     }
 }
 
@@ -268,12 +269,12 @@ private fun BigButton(icon: ImageVector, text: String, modifier: Modifier, onCli
 private fun InfoRow(value: String, label: String, onClick: (() -> Unit)? = null) {
     Row(
         Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .padding(horizontal = 20.dp, vertical = 10.dp),
+            .padding(horizontal = 18.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            EmojiText(value, fontSize = 17.sp)
-            Text(label, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            EmojiText(value, fontSize = 15.sp)
+            Text(label, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (onClick != null) Icon(Icons.Filled.ContentCopy, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
     }
@@ -282,15 +283,20 @@ private fun InfoRow(value: String, label: String, onClick: (() -> Unit)? = null)
 @Composable
 private fun MenuRow(icon: ImageVector, text: String, tint: Color, onClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 11.dp),
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(tint), contentAlignment = Alignment.Center) {
-            Icon(icon, null, tint = Color.White, modifier = Modifier.size(20.dp))
+        Box(
+            Modifier.size(28.dp).clip(RoundedCornerShape(8.dp))
+                .background(Brush.verticalGradient(listOf(lerp(tint, Color.White, 0.18f), tint))),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, null, tint = Color.White, modifier = Modifier.size(17.dp))
         }
         Spacer(Modifier.width(14.dp))
-        Text(text, fontSize = 16.sp, modifier = Modifier.weight(1f))
-        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(text, fontSize = 15.sp, modifier = Modifier.weight(1f))
+        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+            modifier = Modifier.size(20.dp))
     }
 }
 

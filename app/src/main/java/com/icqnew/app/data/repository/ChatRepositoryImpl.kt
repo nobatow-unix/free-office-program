@@ -401,6 +401,9 @@ class ChatRepositoryImpl(
                     attId = attId,
                     replyTo = m.replyTo,
                     fwdName = m.fwdName,
+                    poll = if (m.kind == MessageKind.POLL.wire) m.poll?.let { decodePollDto(it) }?.let { p ->
+                        com.icqnew.app.data.remote.WsPoll(p.options.map { it.text }, p.multiple, p.anonymous)
+                    } else null,
                 )
             )
             Unit
@@ -423,7 +426,9 @@ class ChatRepositoryImpl(
             return true
         }
         val ok = socket.send(WsOut("delete", id = sid))
-        if (ok) {
+        if (ok && contactDao.get(message.peerUin)?.kind == "channel") {
+            messageDao.deleteById(message.id) // channel posts vanish without a "deleted" stub
+        } else if (ok) {
             messageDao.byId(message.id)?.let {
                 messageDao.update(
                     it.copy(text = "", deleted = true, kind = "text", attId = null, attName = null, reactions = "")
@@ -742,6 +747,69 @@ class ChatRepositoryImpl(
 
     override suspend fun searchChats(query: String): List<PublicChat> = api.searchChats(query).map { it.toPublic() }
 
+    override suspend fun sendPoll(peer: Long, question: String, options: List<String>, multiple: Boolean, anonymous: Boolean) {
+        val clientId = UUID.randomUUID().toString()
+        val dto = com.icqnew.app.data.remote.PollDto(
+            options.map { com.icqnew.app.data.remote.PollOptionDto(it, 0) }, 0, multiple, anonymous, false, emptyList(),
+        )
+        messageDao.insert(
+            MessageEntity(
+                serverId = null, clientId = clientId, peerUin = peer, fromMe = true, fromUin = store.snapshot().uin,
+                text = question.trim(), ts = System.currentTimeMillis(), status = 0, isRead = true,
+                kind = MessageKind.POLL.wire,
+                poll = pollJson.encodeToString(com.icqnew.app.data.remote.PollDto.serializer(), dto),
+            )
+        )
+        sound.playSend()
+        deliver(clientId)
+    }
+
+    override suspend fun votePoll(message: ChatMessage, options: List<Int>): Result<Unit> = runCatching {
+        val sid = message.serverId ?: error("Сообщение ещё не отправлено")
+        val m = api.votePoll(sid, options)
+        applyMessage(m, firstSync = false)
+        Unit
+    }
+
+    override suspend fun pollVoters(message: ChatMessage): List<Pair<Int, User>> {
+        val sid = message.serverId ?: return emptyList()
+        return api.pollVoters(sid).map { it.opt to it.user.toDomain() }
+    }
+
+    override suspend fun reportViews(serverIds: List<Long>) {
+        if (serverIds.isEmpty()) return
+        runCatching { api.postViews(serverIds) }.getOrNull()?.forEach { (id, n) ->
+            id.toLongOrNull()?.let { messageDao.setViews(it, n) }
+        }
+    }
+
+    override suspend fun publicPosts(gid: Long): List<ChatMessage> = runCatching {
+        val me = store.snapshot().uin
+        api.publicPosts(gid).map { d ->
+            MessageEntity(
+                id = d.id, serverId = d.id, clientId = d.clientId, peerUin = groupPeer(gid), fromMe = d.fromUin == me,
+                fromUin = d.fromUin, text = d.text, ts = d.ts, status = 1, isRead = true, kind = d.kind,
+                attId = d.attId, attName = d.attName, attSize = d.attSize, attMime = d.attMime, attDur = d.attDur,
+                reactions = encodeReactions(d), views = d.views, poll = mergePoll(d.poll, null),
+            ).toDomain(me)
+        }
+    }.getOrDefault(emptyList())
+
+    override suspend fun groupLog(peer: Long): List<com.icqnew.app.domain.GroupLogEntry> =
+        api.groupLog(groupIdOf(peer)).map {
+            com.icqnew.app.domain.GroupLogEntry(it.action, it.ts, it.user.toDomain(), it.actor?.toDomain())
+        }
+
+    override suspend fun groupStats(peer: Long, days: Int): com.icqnew.app.domain.GroupStats {
+        val d = api.groupStats(groupIdOf(peer), days)
+        return com.icqnew.app.domain.GroupStats(
+            d.members, d.views, d.reactions, d.avgViews, d.joined, d.left,
+            d.series.map { com.icqnew.app.domain.StatDay(it.day, it.joined, it.left, it.views) },
+            d.posts.map { com.icqnew.app.domain.StatPost(it.id, it.text, it.kind, it.ts, it.views, it.reactions) },
+            d.topReactions.map { it.emoji to it.count },
+        )
+    }
+
     override suspend fun previewChat(gid: Long): PublicChat? = runCatching { api.group(gid).toPublic() }.getOrNull()
 
     override suspend fun joinChat(gid: Long): Long {
@@ -850,6 +918,13 @@ class ChatRepositoryImpl(
         else -> m.fromUin
     }
 
+    /** Keeps my own vote when an update (sent to everybody) does not carry it. */
+    private fun mergePoll(incoming: com.icqnew.app.data.remote.PollDto?, stored: String?): String? {
+        if (incoming == null) return stored
+        val my = incoming.my ?: stored?.let { decodePollDto(it)?.my } ?: emptyList()
+        return pollJson.encodeToString(com.icqnew.app.data.remote.PollDto.serializer(), incoming.copy(my = my))
+    }
+
     private fun encodeReactions(m: MessageDto): String = m.reactions.joinToString(";") { "${it.uin}:${it.emoji}" }
 
     /**
@@ -883,6 +958,8 @@ class ChatRepositoryImpl(
                     fwdName = m.fwdName,
                     reactions = encodeReactions(m),
                     failReason = null,
+                    views = maxOf(existing.views, m.views),
+                    poll = mergePoll(m.poll, existing.poll),
                     status = when {
                         existing.status == 2 || (mine && m.read) -> 2
                         else -> 1
@@ -913,6 +990,8 @@ class ChatRepositoryImpl(
             deleted = m.deleted,
             fwdName = m.fwdName,
             reactions = encodeReactions(m),
+            views = m.views,
+            poll = mergePoll(m.poll, null),
         )
         return if (messageDao.insert(e) == -1L) null else e
     }
@@ -969,7 +1048,8 @@ class ChatRepositoryImpl(
             val title = (chat?.name ?: "Группа") + if (mentioned) " · вас упомянули" else ""
             notifier.showMessage(title, if (sender != null) "$sender: $text" else text, e.peerUin)
         } else {
-            notifier.showMessage(chat?.name ?: "ICQ", text, e.peerUin)
+            // nobody answers into a channel from a notification (only its admins write there)
+            notifier.showMessage(chat?.name ?: "ICQ", text, e.peerUin, canReply = chat?.kind != "channel")
         }
     }
 
@@ -1042,6 +1122,7 @@ class ChatRepositoryImpl(
             MessageKind.FILE -> "📎 " + (attName ?: "Файл")
             MessageKind.VOICE -> "🎤 Голосовое сообщение"
             MessageKind.VIDEO_NOTE -> "⏺ Видеосообщение"
+            MessageKind.POLL -> "📊 $text"
         }
 
     private companion object {
@@ -1086,7 +1167,19 @@ internal fun MessageEntity.toDomain(me: Long) = ChatMessage(
     fwdName = fwdName,
     reactions = decodeReactions(reactions, me),
     failReason = failReason,
+    views = views,
+    poll = poll?.let { decodePollDto(it) }?.let { p ->
+        com.icqnew.app.domain.Poll(
+            p.options.map { com.icqnew.app.domain.PollOption(it.text, it.votes) },
+            p.voters, p.multiple, p.anonymous, p.closed, p.my ?: emptyList(),
+        )
+    },
 )
+
+internal val pollJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
+internal fun decodePollDto(raw: String): com.icqnew.app.data.remote.PollDto? =
+    runCatching { pollJson.decodeFromString(com.icqnew.app.data.remote.PollDto.serializer(), raw) }.getOrNull()
 
 private fun decodeReactions(raw: String, me: Long): List<Reaction> {
     if (raw.isBlank()) return emptyList()

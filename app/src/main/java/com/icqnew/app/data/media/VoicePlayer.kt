@@ -30,6 +30,9 @@ class VoicePlayer(private val cache: MediaCache, private val scope: CoroutineSco
     val state: StateFlow<State> = _state.asStateFlow()
 
     private var player: MediaPlayer? = null
+
+    /** Called with the message id when a voice message played to the end (used to play the next one). */
+    var onFinished: ((Long) -> Unit)? = null
     private var ticker: Job? = null
 
     /** Tap on the play button: starts this message, or stops it if it is already playing. */
@@ -58,7 +61,11 @@ class VoicePlayer(private val cache: MediaCache, private val scope: CoroutineSco
             try {
                 p.setDataSource(f.absolutePath)
                 p.prepare()
-                p.setOnCompletionListener { stop() }
+                p.setOnCompletionListener {
+                    val done = _state.value.playingId
+                    stop()
+                    if (done != null) onFinished?.invoke(done)
+                }
                 applySpeed(p, _state.value.speed)
                 pendingSeek?.let { f -> p.seekTo((p.duration * f).toInt().coerceIn(0, p.duration)) }
                 pendingSeek = null

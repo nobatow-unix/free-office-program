@@ -237,6 +237,58 @@ data class MessageDto(
     @SerialName("fwd_name") val fwdName: String? = null,
     val rev: Long = 0,
     val reactions: List<ReactionDto> = emptyList(),
+    val views: Int = 0,
+    val poll: PollDto? = null,
+)
+
+@Serializable
+data class PollOptionDto(val text: String, val votes: Int = 0)
+
+@Serializable
+data class PollDto(
+    val options: List<PollOptionDto> = emptyList(),
+    val voters: Int = 0,
+    val multiple: Boolean = false,
+    val anonymous: Boolean = true,
+    val closed: Boolean = false,
+    /** my choice; null = unknown (broadcast updates do not carry it) */
+    val my: List<Int>? = null,
+)
+
+/** Poll settings sent together with a new "poll" message. */
+@Serializable
+data class WsPoll(val options: List<String>, val multiple: Boolean = false, val anonymous: Boolean = true)
+
+@Serializable
+data class ViewsRequest(val ids: List<Long>)
+
+@Serializable
+data class VoteRequest(val options: List<Int>)
+
+@Serializable
+data class PollVoterDto(val opt: Int, val user: UserDto)
+
+@Serializable
+data class GroupLogDto(val action: String, val ts: Long, val user: UserDto, val actor: UserDto? = null)
+
+@Serializable
+data class StatDayDto(val day: Long, val joined: Int = 0, val left: Int = 0, val views: Int = 0)
+
+@Serializable
+data class StatPostDto(val id: Long, val text: String = "", val kind: String = "text", val ts: Long = 0,
+                       val views: Int = 0, val reactions: Int = 0)
+
+@Serializable
+data class StatReactionDto(val emoji: String, val count: Int)
+
+@Serializable
+data class GroupStatsDto(
+    val members: Int = 0, val views: Int = 0, val reactions: Int = 0,
+    @SerialName("avg_views") val avgViews: Int = 0,
+    val joined: Int = 0, val left: Int = 0,
+    val series: List<StatDayDto> = emptyList(),
+    val posts: List<StatPostDto> = emptyList(),
+    @SerialName("top_reactions") val topReactions: List<StatReactionDto> = emptyList(),
 )
 
 @Serializable
@@ -306,6 +358,7 @@ data class WsOut(
     val emoji: String? = null,
     val data: kotlinx.serialization.json.JsonObject? = null,
     val active: Boolean? = null,
+    val poll: WsPoll? = null,
 )
 
 /** Server -> client over WebSocket

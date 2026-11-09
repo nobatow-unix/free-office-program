@@ -179,6 +179,18 @@ class IcqApi(private val client: HttpClient, private val store: SessionStore) {
 
     suspend fun searchChats(q: String): List<GroupDto> = get("/api/search/chats", mapOf("q" to q))
 
+    suspend fun postViews(ids: List<Long>): Map<String, Int> = post("/api/messages/views", ViewsRequest(ids))
+
+    suspend fun votePoll(mid: Long, options: List<Int>): MessageDto = post("/api/polls/$mid/vote", VoteRequest(options))
+
+    suspend fun pollVoters(mid: Long): List<PollVoterDto> = get("/api/polls/$mid/voters")
+
+    suspend fun publicPosts(gid: Long): List<MessageDto> = get("/api/groups/$gid/posts", mapOf("limit" to "5"))
+
+    suspend fun groupLog(gid: Long): List<GroupLogDto> = get("/api/groups/$gid/log")
+
+    suspend fun groupStats(gid: Long, days: Int): GroupStatsDto = get("/api/groups/$gid/stats", mapOf("days" to days.toString()))
+
     suspend fun joinGroup(gid: Long): GroupDto = post("/api/groups/$gid/join", OkResponse())
 
     suspend fun dropPushToken(token: String) {

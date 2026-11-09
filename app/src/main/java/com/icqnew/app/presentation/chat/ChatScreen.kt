@@ -53,6 +53,12 @@ import androidx.compose.material.icons.outlined.EmojiEmotions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.border
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -90,6 +96,7 @@ import com.icqnew.app.presentation.components.sameDay
 import com.icqnew.app.presentation.emoji.EmojiPanel
 import com.icqnew.app.presentation.emoji.EmojiText
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -146,6 +153,8 @@ fun ChatScreen(
 
     var viewer by remember { mutableStateOf<Pair<File, ChatMessage>?>(null) }
     var fileViewer by remember { mutableStateOf<ChatMessage?>(null) }
+    var creatingPoll by remember { mutableStateOf(false) }
+    var attachSheet by remember { mutableStateOf(false) }
     var actionsFor by remember { mutableStateOf<ChatMessage?>(null) }
     var forwarding by remember { mutableStateOf<ChatMessage?>(null) }
     var deleting by remember { mutableStateOf<ChatMessage?>(null) }
@@ -241,9 +250,11 @@ fun ChatScreen(
 
     // Build the reversed list with day headers (reverseLayout: index 0 = newest, at the bottom).
     val callsHere by vm.calls.collectAsStateWithLifecycle()
-    val rows: List<ListRow> = remember(messages, callsHere) {
-        // messages and calls on one timeline (newest first: reverseLayout)
-        val timeline: List<Any> = (messages + callsHere).sortedBy { if (it is ChatMessage) it.ts else (it as com.icqnew.app.domain.CallRecord).ts }
+    val rows: List<ListRow> = remember(messages, callsHere, isChannel) {
+        // messages and calls on one timeline (newest first: reverseLayout);
+        // deleted channel posts are not shown at all
+        val visible = if (isChannel) messages.filter { !it.deleted } else messages
+        val timeline: List<Any> = (visible + callsHere).sortedBy { if (it is ChatMessage) it.ts else (it as com.icqnew.app.domain.CallRecord).ts }
         val out = ArrayList<ListRow>(timeline.size + 8)
         val rev = timeline.asReversed()
         fun tsOf(x: Any?): Long? = when (x) {
@@ -278,6 +289,18 @@ fun ChatScreen(
         val map = HashMap<Long, Int>()
         rows.forEachIndexed { i, r -> if (r is ListRow.Msg) r.m.serverId?.let { map[it] = i } }
         map
+    }
+
+    // channel posts on screen count as "seen" (👁 counter)
+    val currentRows by rememberUpdatedState(rows)
+    LaunchedEffect(isChannel, listState) {
+        if (!isChannel) return@LaunchedEffect
+        snapshotFlow {
+            listState.layoutInfo.visibleItemsInfo.mapNotNull { (currentRows.getOrNull(it.index) as? ListRow.Msg)?.m?.serverId }
+        }.collectLatest { ids ->
+            delay(700) // only what stays on screen for a moment
+            vm.reportViews(ids)
+        }
     }
 
     val newestId = messages.lastOrNull()?.id
@@ -613,6 +636,7 @@ fun ChatScreen(
                                             onLink = { tag, value -> onLinkTap(tag, value) },
                                             loadPreview = { url -> vm.linkPreview(url) },
                                             videoSource = { vm.streamSource(m) },
+                                            onVote = if (m.kind == MessageKind.POLL) ({ opts -> vm.vote(m, opts) }) else null,
                                         )
                                     }
                                 }
@@ -704,13 +728,10 @@ fun ChatScreen(
                                     onClose = vm::cancelReplyOrEdit,
                                 )
                             }
-                            if (recording) {
-                                RecordingBar(
-                                    levels = recLevels,
-                                    onCancel = { vm.finishRecording(false) },
-                                    onSend = { vm.finishRecording(true) },
-                                )
-                            } else {
+                            // the input bar stays composed while recording, so the finger that holds the mic
+                            // button keeps being tracked (release = send, slide left = cancel)
+                            Box(contentAlignment = Alignment.BottomCenter) {
+                                Box(Modifier.graphicsLayer { alpha = if (recording) 0f else 1f }) {
                                 InputBar(
                                     text = input,
                                     showPanel = showPanel,
@@ -737,16 +758,34 @@ fun ChatScreen(
                                         if (need.isEmpty()) openVideoNote() else videoNotePermission.launch(need.toTypedArray())
                                     },
                                     onSend = vm::send,
-                                    onMic = {
+                                    onMicDown = {
                                         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
                                             == PackageManager.PERMISSION_GRANTED
                                         ) {
-                                            if (!vm.startRecording()) {
-                                                Toast.makeText(context, "Не удалось начать запись", Toast.LENGTH_SHORT).show()
+                                            vm.startRecording().also { ok ->
+                                                if (!ok) Toast.makeText(context, "Не удалось начать запись", Toast.LENGTH_SHORT).show()
                                             }
-                                        } else micPermission.launch(Manifest.permission.RECORD_AUDIO)
+                                        } else {
+                                            micPermission.launch(Manifest.permission.RECORD_AUDIO)
+                                            false
+                                        }
                                     },
+                                    onMicUp = { cancel -> if (recording) vm.finishRecording(!cancel) },
+                                    onPoll = if (isGroup && canWrite) ({ creatingPoll = true }) else null,
+                                    onGallery = { attachSheet = true },
                                 )
+                                }
+                                androidx.compose.animation.AnimatedVisibility(
+                                    visible = recording,
+                                    enter = androidx.compose.animation.slideInHorizontally { it / 3 } + androidx.compose.animation.fadeIn(),
+                                    exit = androidx.compose.animation.fadeOut(),
+                                ) {
+                                    RecordingBar(
+                                        levels = recLevels,
+                                        onCancel = { vm.finishRecording(false) },
+                                        onSend = { vm.finishRecording(true) },
+                                    )
+                                }
                             }
                             if (showPanel && !imeVisible) {
                                 EmojiPanel(
@@ -922,6 +961,32 @@ fun ChatScreen(
         )
     }
 
+    if (attachSheet) {
+        AttachSheet(
+            onDismiss = { attachSheet = false },
+            onSend = { uris -> uris.forEach { sendUri(it) } },
+            onEditPhoto = { editPhoto = it },
+            onCamera = {
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) openCamera()
+                else cameraPermission.launch(Manifest.permission.CAMERA)
+            },
+            onSystemGallery = { mediaPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) },
+            onFile = { filePicker.launch("*/*") },
+            onVideoNote = {
+                val need = listOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
+                    .filter { ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED }
+                if (need.isEmpty()) openVideoNote() else videoNotePermission.launch(need.toTypedArray())
+            },
+            onPoll = if (isGroup && canWrite) ({ creatingPoll = true }) else null,
+        )
+    }
+    if (creatingPoll) {
+        CreatePollDialog(
+            onDismiss = { creatingPoll = false },
+            onCreate = { q, opts, multiple, anonymous -> creatingPoll = false; vm.sendPoll(q, opts, multiple, anonymous) },
+        )
+    }
+
     fileViewer?.let { m ->
         FileViewer(
             m = m,
@@ -985,9 +1050,12 @@ private fun InputBar(
     onCamera: () -> Unit,
     onPickFile: () -> Unit,
     onSend: () -> Unit,
-    onMic: () -> Unit,
+    onMicDown: () -> Boolean,
+    onMicUp: (cancel: Boolean) -> Unit,
     members: List<User> = emptyList(),
     onVideoNote: () -> Unit = {},
+    onPoll: (() -> Unit)? = null,
+    onGallery: () -> Unit = {},
 ) {
     var attachMenu by remember { mutableStateOf(false) }
     // the field keeps the selection (needed for the formatting menu and @mentions)
@@ -1032,19 +1100,36 @@ private fun InputBar(
             }
         }
     }
-    // formatting bar: appears as soon as some text is selected (like Telegram's B / I / U menu)
-    androidx.compose.animation.AnimatedVisibility(visible = !value.selection.collapsed) {
+    // one compact selection bar (no popup: a popup steals focus and made the menu blink)
+    androidx.compose.animation.AnimatedVisibility(
+        visible = !value.selection.collapsed || toolbar.shown,
+        enter = androidx.compose.animation.expandVertically() + androidx.compose.animation.fadeIn(),
+        exit = androidx.compose.animation.shrinkVertically() + androidx.compose.animation.fadeOut(),
+    ) {
         Row(
             Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer)
                 .horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            FORMATS.forEach { (label, mark) ->
+            @Composable
+            fun chip(label: String, style: androidx.compose.ui.text.TextStyle = androidx.compose.ui.text.TextStyle(), onClick: () -> Unit) {
                 Box(
                     Modifier.clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceContainerHighest)
-                        .clickable { change(applyFormat(value, mark)) }.padding(horizontal = 12.dp, vertical = 7.dp),
-                ) { Text(label, style = formatPreviewStyle(mark), fontSize = 14.sp) }
+                        .clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 7.dp),
+                ) { Text(label, style = style, fontSize = 14.sp) }
+            }
+            if (!value.selection.collapsed) {
+                toolbar.onCut?.let { f -> chip("Вырезать") { f(); toolbar.hide() } }
+                toolbar.onCopy?.let { f -> chip("Копировать") { f(); toolbar.hide() } }
+            }
+            toolbar.onPaste?.let { f -> chip("Вставить") { f(); toolbar.hide() } }
+            toolbar.onSelectAll?.let { f -> chip("Всё") { f() } }
+            if (!value.selection.collapsed) {
+                Box(Modifier.width(1.dp).height(22.dp).background(MaterialTheme.colorScheme.outlineVariant))
+                FORMATS.forEach { (label, mark) ->
+                    chip(label, formatPreviewStyle(mark)) { change(applyFormat(value, mark)); toolbar.hide() }
+                }
             }
         }
     }
@@ -1073,7 +1158,7 @@ private fun InputBar(
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                 .focusRequester(focus)
                 .onFocusChanged { if (it.isFocused) onFieldFocused() },
-            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 16.sp, color = onSurface),
+            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 16.sp, color = onSurface, fontFamily = com.icqnew.app.presentation.theme.Rubik),
             cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
             maxLines = 6,
             decorationBox = { inner ->
@@ -1086,26 +1171,10 @@ private fun InputBar(
             },
         )
         }
-        // selection menu: copy / paste + Telegram-like formatting
-        DropdownMenu(expanded = toolbar.shown, onDismissRequest = { toolbar.hide() }) {
-            toolbar.onCut?.let { f -> DropdownMenuItem(text = { Text("Вырезать") }, onClick = { f(); toolbar.hide() }) }
-            toolbar.onCopy?.let { f -> DropdownMenuItem(text = { Text("Копировать") }, onClick = { f(); toolbar.hide() }) }
-            toolbar.onPaste?.let { f -> DropdownMenuItem(text = { Text("Вставить") }, onClick = { f(); toolbar.hide() }) }
-            toolbar.onSelectAll?.let { f -> DropdownMenuItem(text = { Text("Выделить всё") }, onClick = { f(); toolbar.hide() }) }
-            if (!value.selection.collapsed) {
-                HorizontalDivider()
-                FORMATS.forEach { (label, mark) ->
-                    DropdownMenuItem(
-                        text = { Text(label, style = formatPreviewStyle(mark)) },
-                        onClick = { change(applyFormat(value, mark)); toolbar.hide() },
-                    )
-                }
-            }
-        }
         }
         if (!editing) {
             Box {
-                IconButton(onClick = { attachMenu = true }, modifier = Modifier.size(42.dp)) {
+                IconButton(onClick = onGallery, modifier = Modifier.size(42.dp)) {
                     Icon(Icons.Filled.AttachFile, "Вложение", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 DropdownMenu(expanded = attachMenu, onDismissRequest = { attachMenu = false }) {
@@ -1143,9 +1212,7 @@ private fun InputBar(
             label = "send",
         ) { showMic ->
             if (showMic) {
-                IconButton(onClick = onMic, modifier = Modifier.size(42.dp)) {
-                    Icon(Icons.Filled.Mic, "Голосовое сообщение", tint = MaterialTheme.colorScheme.primary)
-                }
+                MicButton(onMicDown = onMicDown, onMicUp = onMicUp, onVideoNote = onVideoNote)
             } else {
                 FilledIconButton(onClick = onSend, modifier = Modifier.size(42.dp)) {
                     Icon(if (editing) Icons.Filled.Check else Icons.AutoMirrored.Filled.Send, "Отправить")
@@ -1212,6 +1279,85 @@ private class FormattingToolbar : androidx.compose.ui.platform.TextToolbar {
     }
 }
 
+/**
+ * Telegram-like record button: a tap switches voice <-> round video,
+ * holding records (release = send, slide left = cancel).
+ */
+@Composable
+private fun MicButton(onMicDown: () -> Boolean, onMicUp: (Boolean) -> Unit, onVideoNote: () -> Unit) {
+    var videoMode by rememberSaveable { mutableStateOf(false) }
+    var holding by remember { mutableStateOf(false) }
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val cancelDist = with(androidx.compose.ui.platform.LocalDensity.current) { 110.dp.toPx() }
+    val primary = MaterialTheme.colorScheme.primary
+    val scale by androidx.compose.animation.core.animateFloatAsState(
+        if (holding) 1.45f else 1f, androidx.compose.animation.core.spring(dampingRatio = 0.5f), label = "mic",
+    )
+    val latestDown by rememberUpdatedState(onMicDown)
+    val latestUp by rememberUpdatedState(onMicUp)
+    val latestVideo by rememberUpdatedState(onVideoNote)
+    Box(
+        Modifier
+            .size(42.dp)
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .clip(CircleShape)
+            .background(if (holding) primary else Color.Transparent)
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    var released = false
+                    withTimeoutOrNull(260) {
+                        waitForUpOrCancellation()
+                        released = true
+                    }
+                    if (released) { // quick tap: switch mode
+                        videoMode = !videoMode
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                        return@awaitEachGesture
+                    }
+                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                    if (videoMode) { // the camera app records the circle
+                        latestVideo()
+                        do { val e = awaitPointerEvent() } while (e.changes.any { it.pressed })
+                        return@awaitEachGesture
+                    }
+                    if (!latestDown()) return@awaitEachGesture
+                    holding = true
+                    var dx = 0f
+                    while (true) {
+                        val e = awaitPointerEvent()
+                        val c = e.changes.firstOrNull { it.id == down.id } ?: e.changes.first()
+                        dx = c.position.x - down.position.x
+                        c.consume()
+                        if (!c.pressed) break
+                    }
+                    holding = false
+                    latestUp(dx < -cancelDist)
+                }
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        androidx.compose.animation.AnimatedContent(
+            targetState = videoMode,
+            transitionSpec = {
+                (androidx.compose.animation.scaleIn(initialScale = 0.3f) + androidx.compose.animation.fadeIn()) togetherWith
+                    (androidx.compose.animation.scaleOut(targetScale = 0.3f) + androidx.compose.animation.fadeOut())
+            },
+            label = "micMode",
+        ) { video ->
+            val tint = if (holding) Color.White else primary
+            if (video) {
+                Box(
+                    Modifier.size(24.dp).border(2.dp, tint, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) { Icon(Icons.Filled.Videocam, "Видеосообщение", tint = tint, modifier = Modifier.size(14.dp)) }
+            } else {
+                Icon(Icons.Filled.Mic, "Голосовое сообщение", tint = tint)
+            }
+        }
+    }
+}
+
 @Composable
 private fun RecordingBar(levels: List<Float>, onCancel: () -> Unit, onSend: () -> Unit) {
     var sec by remember { mutableIntStateOf(0) }
@@ -1225,7 +1371,7 @@ private fun RecordingBar(levels: List<Float>, onCancel: () -> Unit, onSend: () -
     }
     val primary = MaterialTheme.colorScheme.primary
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
+        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconButton(onClick = onCancel) {
@@ -1238,6 +1384,8 @@ private fun RecordingBar(levels: List<Float>, onCancel: () -> Unit, onSend: () -
         Spacer(Modifier.width(8.dp))
         Text("%d:%02d".format(sec / 60, sec % 60), fontWeight = FontWeight.Medium)
         Spacer(Modifier.width(10.dp))
+        Text("‹ влево — отмена", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+        Spacer(Modifier.width(6.dp))
         // live bars: they grow with your voice
         Row(
             Modifier.weight(1f).height(34.dp),

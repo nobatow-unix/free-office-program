@@ -11,6 +11,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.composed
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
@@ -379,4 +380,25 @@ fun BotLogo(size: Dp) {
             style = androidx.compose.ui.graphics.drawscope.Stroke(width = w * 0.025f, cap = androidx.compose.ui.graphics.StrokeCap.Round),
         )
     }
+}
+
+/**
+ * @username rows: a tap copies "@name", a long press copies the full link (https://icq-new.online/@name).
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+fun Modifier.usernameCopy(username: String, link: String): Modifier = composed {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    fun put(text: String, toast: String) {
+        val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        cm.setPrimaryClip(android.content.ClipData.newPlainText("ICQ", text))
+        android.widget.Toast.makeText(ctx, toast, android.widget.Toast.LENGTH_SHORT).show()
+    }
+    combinedClickable(
+        onClick = { put("@$username", "@$username скопировано") },
+        onLongClick = {
+            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+            put(link, "Ссылка скопирована")
+        },
+    )
 }

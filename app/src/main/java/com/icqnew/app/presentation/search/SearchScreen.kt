@@ -104,14 +104,14 @@ fun SearchScreen(
                         Row2(
                             avatar = { Avatar(u.name, u.uin, u.avatarUrl, u.online, 46.dp) },
                             title = u.name,
-                            subtitle = (u.username?.let { "@$it · " } ?: "") + "ID ${u.uin} · ${formatPresence(u.online, u.lastSeen, u.uin)}",
+                            subtitle = (u.username?.let { "@$it · " } ?: "") + formatPresence(u.online, u.lastSeen, u.uin),
                             verified = u.verified,
                             onClick = { vm.open(u, onOpenChat) },
                         )
                     }
                 }
                 if (s.publicChats.isNotEmpty()) {
-                    item { Header(if (channelsOnly && q.isEmpty()) "Популярные каналы" else "Группы и каналы") }
+                    item { Header(if (q.isEmpty() && !channelsOnly) "Проверенные каналы" else if (channelsOnly && q.isEmpty()) "Популярные каналы" else "Группы и каналы") }
                     items(s.publicChats, key = { "g" + it.id }) { g ->
                         Row2(
                             avatar = { Avatar(g.name, groupPeer(g.id), g.avatarUrl, false, 46.dp, isGroup = true, isChannel = g.isChannel) },

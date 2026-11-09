@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.PersonRemove
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material3.*
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,6 +53,7 @@ import com.icqnew.app.domain.ChatPrefs
 import com.icqnew.app.domain.ChatRepository
 import com.icqnew.app.domain.User
 import com.icqnew.app.presentation.appViewModel
+import com.icqnew.app.presentation.components.usernameCopy
 import com.icqnew.app.presentation.components.Avatar
 import com.icqnew.app.presentation.components.LocalServerUrl
 import com.icqnew.app.presentation.components.formatPresence
@@ -138,7 +140,7 @@ class ProfileViewModel(private val uin: Long, private val repo: ChatRepository) 
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ProfileScreen(uin: Long, onBack: () -> Unit, onOpenChat: () -> Unit) {
+fun ProfileScreen(uin: Long, onBack: () -> Unit, onOpenChat: () -> Unit, onOpenChannel: (Long) -> Unit = {}) {
     val vm = appViewModel(key = "profile$uin") { c -> ProfileViewModel(uin, c.chatRepository) }
     val user by vm.user.collectAsStateWithLifecycle()
     val prefs by vm.prefs.collectAsStateWithLifecycle()
@@ -253,24 +255,26 @@ fun ProfileScreen(uin: Long, onBack: () -> Unit, onOpenChat: () -> Unit) {
                 Modifier.padding(horizontal = 16.dp).fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
             ) {
-                ListItem(
-                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                    overlineContent = { Text("ID") },
-                    headlineContent = { Text(uin.toString(), fontSize = 18.sp, fontWeight = FontWeight.Medium) },
-                    trailingContent = {
-                        IconButton(onClick = {
-                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            cm.setPrimaryClip(ClipData.newPlainText("ID", uin.toString()))
-                            Toast.makeText(context, "ID скопирован", Toast.LENGTH_SHORT).show()
-                        }) { Icon(Icons.Filled.ContentCopy, "Копировать") }
-                    },
-                )
+                // personal channel first (like Telegram); the numeric ID is only told by the bot
+                card?.user?.takeIf { it.channelId != 0L }?.let { u ->
+                    ListItem(
+                        modifier = Modifier.clickable { onOpenChannel(u.channelId) },
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                        overlineContent = { Text("Канал") },
+                        leadingContent = { Avatar(u.channelName, -u.channelId, u.channelAvatar, false, 44.dp, isChannel = true) },
+                        headlineContent = { com.icqnew.app.presentation.emoji.EmojiText(u.channelName, maxLines = 1, fontSize = 17.sp) },
+                        trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
+                    )
+                    HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+                }
                 user?.username?.takeIf { it.isNotBlank() }?.let { un ->
                     val link = com.icqnew.app.presentation.IcqLinks.user(un)
                     ListItem(
+                        modifier = Modifier.usernameCopy(un, link),
                         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                        overlineContent = { Text("Ссылка") },
-                        headlineContent = { Text(link.removePrefix("https://"), fontSize = 16.sp, color = MaterialTheme.colorScheme.primary) },
+                        overlineContent = { Text("Имя пользователя") },
+                        headlineContent = { Text("@$un", fontSize = 17.sp, color = MaterialTheme.colorScheme.primary) },
+                        supportingContent = { Text("нажмите — скопировать, удерживайте — ссылка", fontSize = 12.sp) },
                         trailingContent = {
                             IconButton(onClick = {
                                 val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain")
@@ -300,14 +304,6 @@ fun ProfileScreen(uin: Long, onBack: () -> Unit, onOpenChat: () -> Unit) {
                         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                         overlineContent = { Text("День рождения") },
                         headlineContent = { Text("🎂 $b", fontSize = 17.sp) },
-                    )
-                }
-                card?.user?.takeIf { it.channelId != 0L }?.let { u ->
-                    ListItem(
-                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                        overlineContent = { Text("Канал") },
-                        leadingContent = { Avatar(u.channelName, -u.channelId, u.channelAvatar, false, 40.dp, isChannel = true) },
-                        headlineContent = { com.icqnew.app.presentation.emoji.EmojiText(u.channelName, maxLines = 1) },
                     )
                 }
                 card?.let { c ->

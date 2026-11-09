@@ -16,6 +16,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.AdminPanelSettings
+import androidx.compose.material.icons.filled.AlternateEmail
+import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Share
@@ -37,6 +40,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -57,6 +61,7 @@ import com.icqnew.app.domain.User
 import com.icqnew.app.domain.groupPeer
 import com.icqnew.app.presentation.appViewModel
 import com.icqnew.app.presentation.chat.subscribers
+import com.icqnew.app.presentation.components.usernameCopy
 import com.icqnew.app.presentation.components.Avatar
 import com.icqnew.app.presentation.components.EditMode
 import com.icqnew.app.presentation.components.IcqIcons
@@ -220,12 +225,15 @@ class JoinViewModel(private val gid: Long, private val repo: ChatRepository) : V
     val error: StateFlow<String?> = _error.asStateFlow()
     private val _busy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = _busy.asStateFlow()
+    private val _posts = MutableStateFlow<List<com.icqnew.app.domain.ChatMessage>>(emptyList())
+    val posts: StateFlow<List<com.icqnew.app.domain.ChatMessage>> = _posts.asStateFlow()
 
     init {
         viewModelScope.launch {
             val c = repo.previewChat(gid)
             if (c == null) _error.value = "Чат не найден" else _chat.value = c
         }
+        viewModelScope.launch { _posts.value = repo.publicPosts(gid) }
     }
 
     fun join(onDone: (Long) -> Unit) {
@@ -249,6 +257,7 @@ fun JoinScreen(gid: Long, onBack: () -> Unit, onJoined: (Long) -> Unit) {
     val chat by vm.chat.collectAsStateWithLifecycle()
     val error by vm.error.collectAsStateWithLifecycle()
     val busy by vm.busy.collectAsStateWithLifecycle()
+    val posts by vm.posts.collectAsStateWithLifecycle()
     Scaffold(
         topBar = {
             TopAppBar(
@@ -260,7 +269,7 @@ fun JoinScreen(gid: Long, onBack: () -> Unit, onJoined: (Long) -> Unit) {
         containerColor = MaterialTheme.colorScheme.background,
     ) { padding ->
         Column(
-            Modifier.padding(padding).fillMaxSize().padding(24.dp),
+            Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             val c = chat
@@ -301,6 +310,40 @@ fun JoinScreen(gid: Long, onBack: () -> Unit, onJoined: (Long) -> Unit) {
                 Spacer(Modifier.height(12.dp))
                 Text(it, color = MaterialTheme.colorScheme.error)
             }
+            if (posts.isNotEmpty()) {
+                Spacer(Modifier.height(24.dp))
+                Text(
+                    if (c.isChannel) "Последние публикации" else "Последние сообщения",
+                    fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 14.sp,
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                )
+                posts.forEach { p -> PostPreview(p) }
+            }
+        }
+    }
+}
+
+/** A compact card of one channel post (preview before subscribing). */
+@Composable
+private fun PostPreview(p: com.icqnew.app.domain.ChatMessage) {
+    Column(
+        Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer).padding(horizontal = 14.dp, vertical = 10.dp),
+    ) {
+        val isText = p.kind == com.icqnew.app.domain.MessageKind.TEXT || p.kind == com.icqnew.app.domain.MessageKind.BOT
+        if (isText) {
+            com.icqnew.app.presentation.emoji.RichText(p.text, fontSize = 15.sp, modifier = Modifier.fillMaxWidth())
+        } else {
+            EmojiText(com.icqnew.app.presentation.chat.shortPreview(p), fontSize = 15.sp)
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            val reacts = p.reactions.sumOf { it.count }
+            if (reacts > 0) {
+                p.reactions.take(3).forEach { r -> com.icqnew.app.presentation.emoji.EmojiImage(r.emoji, 16.dp) }
+                Text(" $reacts", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Spacer(Modifier.weight(1f))
+            com.icqnew.app.presentation.chat.Meta(p, MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -328,6 +371,9 @@ class GroupViewModel(
     fun consume() {
         _message.value = null
     }
+
+    suspend fun stats(days: Int) = repo.groupStats(peer, days)
+    suspend fun log() = repo.groupLog(peer)
 
     private fun run(done: String? = null, block: suspend () -> Unit) {
         viewModelScope.launch {
@@ -443,6 +489,15 @@ fun GroupInfoScreen(
                         EmojiText(g?.about ?: "", textAlign = TextAlign.Center)
                     }
                 }
+                if (g != null && !g.username.isNullOrBlank()) {
+                    ListItem(
+                        modifier = Modifier.usernameCopy(g.username!!, com.icqnew.app.presentation.IcqLinks.group(g.id, g.username)),
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                        leadingContent = { Icon(Icons.Filled.AlternateEmail, null, tint = MaterialTheme.colorScheme.primary) },
+                        headlineContent = { Text("@" + g.username, color = MaterialTheme.colorScheme.primary, fontSize = 17.sp) },
+                        supportingContent = { Text("нажмите — скопировать, удерживайте — ссылка", fontSize = 12.sp) },
+                    )
+                }
                 if (g != null && (g.isPublic || !g.username.isNullOrBlank())) {
                     val link = com.icqnew.app.presentation.IcqLinks.group(g.id, g.username)
                     ListItem(
@@ -454,7 +509,7 @@ fun GroupInfoScreen(
                         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                         leadingContent = { Icon(Icons.Filled.Share, null, tint = MaterialTheme.colorScheme.primary) },
                         headlineContent = { Text("Поделиться ссылкой") },
-                        supportingContent = { Text(link.removePrefix("https://"), color = MaterialTheme.colorScheme.primary) },
+                        supportingContent = { Text(g.username?.let { "@$it" } ?: "ссылка-приглашение", color = MaterialTheme.colorScheme.primary) },
                     )
                 }
                 ListItem(
@@ -674,12 +729,12 @@ private fun RoleBadge(text: String) {
 private fun MenuLine(icon: ImageVector, text: String, tint: Color? = null, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick)
-            .padding(vertical = 12.dp, horizontal = 4.dp),
+            .padding(vertical = 9.dp, horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, null, tint = tint ?: MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.width(16.dp))
-        Text(text, color = tint ?: MaterialTheme.colorScheme.onSurface, fontSize = 16.sp)
+        Icon(icon, null, tint = tint ?: MaterialTheme.colorScheme.primary, modifier = Modifier.size(21.dp))
+        Spacer(Modifier.width(14.dp))
+        Text(text, color = tint ?: MaterialTheme.colorScheme.onSurface, fontSize = 15.sp)
     }
 }
 
@@ -711,6 +766,10 @@ fun GroupSettingsScreen(peer: Long, onBack: () -> Unit) {
         st = n
         vm.saveSettings(n, null)
     }
+    var showStats by remember { mutableStateOf(false) }
+    var showLog by remember { mutableStateOf(false) }
+    if (showStats) ChannelStatsScreen(ch, { d -> vm.stats(d) }) { showStats = false }
+    if (showLog) RecentActionsScreen(ch, { vm.log() }) { showLog = false }
 
     Scaffold(
         topBar = {
@@ -723,6 +782,12 @@ fun GroupSettingsScreen(peer: Long, onBack: () -> Unit) {
         containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState())) {
+            Block("Управление") {
+                Column(Modifier.padding(horizontal = 12.dp)) {
+                    MenuLine(Icons.Filled.BarChart, "Статистика") { showStats = true }
+                    MenuLine(Icons.Filled.History, "Недавние действия") { showLog = true }
+                }
+            }
             Block("Ссылка") {
                 Text(
                     "ID: ${g.id}", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -809,11 +874,11 @@ fun GroupSettingsScreen(peer: Long, onBack: () -> Unit) {
 private fun Block(title: String, content: @Composable ColumnScope.() -> Unit) {
     Text(
         title, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(start = 28.dp, top = 16.dp, bottom = 6.dp),
+        modifier = Modifier.padding(start = 26.dp, top = 12.dp, bottom = 4.dp),
     )
     Column(
-        Modifier.padding(horizontal = 12.dp).fillMaxWidth().clip(RoundedCornerShape(18.dp))
-            .background(MaterialTheme.colorScheme.surface).padding(vertical = 8.dp),
+        Modifier.padding(horizontal = 12.dp).fillMaxWidth().clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surface).padding(vertical = 4.dp),
         content = content,
     )
 }
@@ -821,13 +886,13 @@ private fun Block(title: String, content: @Composable ColumnScope.() -> Unit) {
 @Composable
 private fun Switch2(title: String, hint: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clickable { onChange(!checked) }.padding(horizontal = 16.dp, vertical = 8.dp),
+        Modifier.fillMaxWidth().clickable { onChange(!checked) }.padding(horizontal = 14.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            com.icqnew.app.presentation.emoji.EmojiText(title, fontSize = 16.sp)
-            Text(hint, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            com.icqnew.app.presentation.emoji.EmojiText(title, fontSize = 15.sp)
+            Text(hint, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        Switch(checked = checked, onCheckedChange = onChange)
+        Switch(checked = checked, onCheckedChange = onChange, modifier = Modifier.scale(0.8f))
     }
 }
