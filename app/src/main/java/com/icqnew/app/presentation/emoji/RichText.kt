@@ -129,6 +129,10 @@ fun RichText(
     onTextLayout: (TextLayoutResult) -> Unit = {},
     onLink: (tag: String, value: String) -> Unit = { _, _ -> },
     onLongPress: () -> Unit = {},
+    maxLines: Int = Int.MAX_VALUE,
+    overflow: androidx.compose.ui.text.style.TextOverflow = androidx.compose.ui.text.style.TextOverflow.Clip,
+    /** false = only shows the formatting (chat list previews): taps go to the parent row */
+    interactive: Boolean = true,
 ) {
     val styled = remember(text, linkColor, codeBackground) { RichFormat.build(text, linkColor, false, codeBackground) }
     val (annotated, keys) = remember(styled) { Emoji.annotateStyled(styled) }
@@ -157,7 +161,7 @@ fun RichText(
     Text(
         annotated,
         modifier = modifier
-            .pointerInput(annotated) {
+            .then(if (!interactive) Modifier else Modifier.pointerInput(annotated) {
                 detectTapGestures(
                     onLongPress = { onLongPress() },
                     onTap = { pos ->
@@ -174,7 +178,7 @@ fun RichText(
                         } else onLink(a.tag, a.item)
                     },
                 )
-            }
+            })
             .drawWithContent {
                 drawContent()
                 val l = layout ?: return@drawWithContent
@@ -208,6 +212,8 @@ fun RichText(
         color = textColor,
         fontSize = fontSize,
         inlineContent = inline,
+        maxLines = maxLines,
+        overflow = overflow,
         onTextLayout = { layout = it; onTextLayout(it) },
     )
 }

@@ -20,13 +20,32 @@ android {
         applicationId = "icq.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 11
-        versionName = "3.8"
+        versionCode = 12
+        versionName = "3.9"
+        // phones only: ARM (no x86 emulator libraries) — the APK gets much smaller
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
+    }
+
+    // ONE permanent key: every new version installs over the previous one (and delta updates work)
+    signingConfigs {
+        create("icq") {
+            storeFile = file("icq-new.keystore")
+            storePassword = "icqnew-2026-key"
+            keyAlias = "icqnew"
+            keyPassword = "icqnew-2026-key"
+        }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8: removes unused code (most of the icon set etc.), names are kept (-dontobfuscate)
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.getByName("icq")
+        }
+        debug {
+            signingConfig = signingConfigs.getByName("icq")
         }
     }
     compileOptions {
@@ -81,6 +100,11 @@ dependencies {
     implementation("io.getstream:stream-webrtc-android:1.1.3")
     // QR scanner for logging in to the web version
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+    // CameraX: round video messages recorded inside the app (flip camera, flash)
+    implementation("androidx.camera:camera-camera2:1.3.4")
+    implementation("androidx.camera:camera-lifecycle:1.3.4")
+    implementation("androidx.camera:camera-video:1.3.4")
+    implementation("androidx.camera:camera-view:1.3.4")
 
     // Push notifications
     implementation(platform("com.google.firebase:firebase-bom:33.5.1"))

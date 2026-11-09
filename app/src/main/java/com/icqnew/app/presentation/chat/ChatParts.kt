@@ -102,8 +102,8 @@ fun chatBackground(): Color =
 
 fun shortPreview(m: ChatMessage): String = when {
     m.deleted -> "Сообщение удалено"
-    m.kind == MessageKind.IMAGE -> "📷 Фото"
-    m.kind == MessageKind.FILE -> "📎 " + (m.attName ?: "Файл")
+    m.kind == MessageKind.IMAGE -> "📷 " + com.icqnew.app.presentation.emoji.RichFormat.plain(m.text).ifBlank { "Фото" }
+    m.kind == MessageKind.FILE -> "📎 " + com.icqnew.app.presentation.emoji.RichFormat.plain(m.text).ifBlank { m.attName ?: "Файл" }
     m.kind == MessageKind.VOICE -> "🎤 Голосовое сообщение"
     m.kind == MessageKind.VIDEO_NOTE -> "⏺ Видеосообщение"
     m.kind == MessageKind.POLL -> "📊 " + m.text
@@ -174,6 +174,8 @@ fun MessageRow(
     onVoiceSeek: ((Float) -> Unit)? = null,
     onVoiceSpeed: () -> Unit = {},
     onVote: ((List<Int>) -> Unit)? = null,
+    /** channel post: centred, wide, same look for everybody (views + time at the bottom) */
+    channelPost: Boolean = false,
 ) {
     val mine = m.fromMe
     val bigEmoji = remember(m.text, m.kind, m.deleted) {
@@ -224,7 +226,7 @@ fun MessageRow(
         Row(
             Modifier.fillMaxWidth().offset { IntOffset(dx.value.roundToInt(), 0) }
                 .padding(top = if (firstOfGroup) 5.dp else 1.5.dp),
-            horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
+            horizontalArrangement = if (channelPost) Arrangement.Center else if (mine) Arrangement.End else Arrangement.Start,
             verticalAlignment = Alignment.Bottom,
         ) {
             if (showSender) {
@@ -244,7 +246,10 @@ fun MessageRow(
                     Icon(Icons.Filled.ErrorOutline, "Ошибка", tint = MaterialTheme.colorScheme.error)
                 }
             }
-            Column(horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
+            Column(
+                modifier = if (channelPost && bigEmoji == 0) Modifier.fillMaxWidth(0.97f).widthIn(max = 480.dp) else Modifier,
+                horizontalAlignment = if (channelPost) Alignment.CenterHorizontally else if (mine) Alignment.End else Alignment.Start,
+            ) {
                 if (bigEmoji > 0) {
                     Column(
                         horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
@@ -283,7 +288,7 @@ fun MessageRow(
                     Bubble(
                         m, firstOfGroup, lastOfGroup, showSender, sender, reply, replyName, voice,
                         onVoice, onImage, loadImage, onFile, onLongPress, onReplyClick, onSenderClick, signature,
-                        onLink, loadPreview, onVoiceSeek, onVoiceSpeed, onReact, onVote,
+                        onLink, loadPreview, onVoiceSeek, onVoiceSpeed, onReact, onVote, channelPost,
                     )
                 }
                 val outside = bigEmoji > 0 || (m.kind == MessageKind.VIDEO_NOTE && !m.deleted && videoSource != null)
@@ -354,14 +359,17 @@ private fun TextWithMeta(
     onLink: (String, String) -> Unit = { _, _ -> },
     onLongPress: () -> Unit = {},
     spoilerColor: Color = Color.Unspecified,
+    /** take the whole bubble width (e.g. under a reply quote) so the time sits in the bottom-right corner */
+    fill: Boolean = false,
     meta: @Composable () -> Unit,
 ) {
-    val lastLine = remember { FloatArray(2) } // [0] = right edge of the last line, [1] = line count
+    // right edge of the last text line; a STATE, so the layout is redone as soon as the text reports it
+    // (-1 = not known yet: then the time goes below the text instead of being drawn over it)
+    var lastRight by remember(text) { mutableFloatStateOf(-1f) }
     Layout(
         content = {
             val onLayout: (androidx.compose.ui.text.TextLayoutResult) -> Unit = { r ->
-                lastLine[0] = r.getLineRight(r.lineCount - 1)
-                lastLine[1] = r.lineCount.toFloat()
+                lastRight = r.getLineRight(r.lineCount - 1)
             }
             if (rich) {
                 com.icqnew.app.presentation.emoji.RichText(
@@ -389,10 +397,12 @@ private fun TextWithMeta(
         val t = measurables[0].measure(constraints)
         val m = measurables[1].measure(Constraints())
         val gap = 8.dp.roundToPx()
-        val inlineWidth = lastLine[0].roundToInt() + gap + m.width
-        val fits = inlineWidth <= constraints.maxWidth
-        val width = (if (fits) maxOf(t.width, inlineWidth) else maxOf(t.width, m.width))
-            .coerceAtMost(constraints.maxWidth)
+        val known = lastRight >= 0f
+        val inlineWidth = lastRight.roundToInt() + gap + m.width
+        val fits = known && inlineWidth <= constraints.maxWidth
+        val natural = if (fits) maxOf(t.width, inlineWidth) else maxOf(t.width, m.width)
+        val width = (if (fill && constraints.hasBoundedWidth) maxOf(natural, constraints.maxWidth) else natural)
+            .coerceIn(constraints.minWidth, constraints.maxWidth)
         val height = if (fits) maxOf(t.height, m.height) else t.height + m.height
         return layout(width, height) {
             t.place(0, 0)
@@ -428,13 +438,14 @@ private fun Bubble(
     onVoiceSpeed: () -> Unit = {},
     onReact: (String) -> Unit = {},
     onVote: ((List<Int>) -> Unit)? = null,
+    post: Boolean = false,
 ) {
-    val mine = m.fromMe
+    val mine = m.fromMe && !post
     val primary = MaterialTheme.colorScheme.primary
     val fg = if (mine) Color.White else MaterialTheme.colorScheme.onSurface
     val big = 18.dp
     val small = 6.dp
-    val shape = RoundedCornerShape(
+    val shape = if (post) RoundedCornerShape(16.dp) else RoundedCornerShape(
         topStart = if (!mine && !firstOfGroup) small else big,
         topEnd = if (mine && !firstOfGroup) small else big,
         bottomStart = if (!mine && lastOfGroup) 4.dp else if (!mine) small else big,
@@ -444,7 +455,8 @@ private fun Bubble(
     val hasHeader = (showSender && firstOfGroup) || (m.fwdName != null && !m.deleted) || (m.replyTo != null && !m.deleted)
 
     // A photo without captions is shown on its own, with rounded corners and no coloured frame.
-    if (isImage && !hasHeader) {
+    val caption = if (m.deleted) "" else m.text
+    if (isImage && !hasHeader && caption.isBlank()) {
         Column(horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
             ImageContent(m, shape, onImage, loadImage, onLongPress)
             if (m.reactions.isNotEmpty()) {
@@ -461,7 +473,7 @@ private fun Bubble(
     }
     Column(
         Modifier
-            .widthIn(min = 64.dp, max = 300.dp)
+            .then(if (post) Modifier.fillMaxWidth() else Modifier.widthIn(min = 64.dp, max = 300.dp))
             .then(if (m.replyTo != null && !m.deleted && !isImage) Modifier.width(IntrinsicSize.Max) else Modifier)
             .shadow(if (mine) 0.dp else 0.6.dp, shape, clip = false)
             .clip(shape)
@@ -509,7 +521,12 @@ private fun Bubble(
         if (m.deleted) {
             TextWithMeta("🚫 Сообщение удалено", fg.copy(alpha = 0.7f)) { Meta(m, metaColor) }
         } else when (m.kind) {
-            MessageKind.IMAGE -> ImageContent(m, RoundedCornerShape(14.dp), onImage, loadImage, onLongPress)
+            MessageKind.IMAGE -> {
+                ImageContent(m, RoundedCornerShape(14.dp), onImage, loadImage, onLongPress, showMeta = caption.isBlank() && !post)
+                if (caption.isNotBlank()) CaptionText(caption, fg, mine, primary, post, onLink, onLongPress, Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+                    Meta(m, metaColor)
+                }
+            }
             MessageKind.FILE -> {
                 Row(
                     Modifier.combinedClickable(onClick = onFile, onLongClick = onLongPress),
@@ -529,7 +546,9 @@ private fun Bubble(
                         Text(FileUtils.humanSize(m.attSize), color = fg.copy(alpha = 0.7f), fontSize = 12.sp)
                     }
                 }
-                Box(Modifier.align(Alignment.End)) { Meta(m, metaColor) }
+                if (caption.isNotBlank()) {
+                    CaptionText(caption, fg, mine, primary, post, onLink, onLongPress, Modifier.padding(top = 6.dp)) { Meta(m, metaColor) }
+                } else if (!post) Box(Modifier.align(Alignment.End)) { Meta(m, metaColor) }
             }
             MessageKind.VOICE -> {
                 val playing = voice.playingId == m.id
@@ -569,7 +588,7 @@ private fun Bubble(
                                 }
                             }
                             Spacer(Modifier.weight(1f))
-                            Meta(m, metaColor)
+                            if (!post) Meta(m, metaColor)
                         }
                     }
                 }
@@ -577,14 +596,21 @@ private fun Bubble(
             MessageKind.POLL -> {
                 val p = m.poll
                 if (p != null) PollContent(m, p, fg, primary, onVote) else Text(m.text, color = fg)
-                Box(Modifier.align(Alignment.End)) { Meta(m, metaColor) }
+                if (!post) Box(Modifier.align(Alignment.End)) { Meta(m, metaColor) }
             }
             else -> {
-                TextWithMeta(
+                if (post) {
+                    com.icqnew.app.presentation.emoji.RichText(
+                        m.text, color = fg, linkColor = Color(0xFF3D9BFF), fontSize = 16.sp,
+                        spoilerColor = MaterialTheme.colorScheme.surface,
+                        onLink = onLink, onLongPress = onLongPress, modifier = Modifier.padding(top = 2.dp),
+                    )
+                } else TextWithMeta(
                     m.text, fg, rich = true,
                     linkColor = if (mine) Color.White else Color(0xFF3D9BFF),
                     onLink = onLink, onLongPress = onLongPress,
                     spoilerColor = if (mine) primary else MaterialTheme.colorScheme.surface,
+                    fill = m.replyTo != null, // bubble width = the reply quote (IntrinsicSize.Max)
                 ) { Meta(m, metaColor) }
                 val url = remember(m.text) { com.icqnew.app.presentation.emoji.RichFormat.firstUrl(m.text) }
                 if (url != null && loadPreview != null) {
@@ -595,8 +621,21 @@ private fun Bubble(
         if (signature != null) {
             Text(signature, color = fg.copy(alpha = 0.6f), fontSize = 12.sp, fontStyle = FontStyle.Italic, modifier = inset)
         }
-        // reactions live inside the post, bottom-left (Telegram style)
-        androidx.compose.animation.AnimatedVisibility(
+        // channel post footer: reactions on the left, 👁 views + time on the right (one row, at the bottom)
+        if (post && !m.deleted && !(isImage && !hasHeader)) {
+            Row(
+                inset.fillMaxWidth().padding(top = 6.dp, bottom = 1.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                Box(Modifier.weight(1f)) {
+                    if (m.reactions.isNotEmpty()) ReactionPills(m, false, primary, onReact)
+                }
+                Spacer(Modifier.width(8.dp))
+                Meta(m, metaColor)
+            }
+        }
+        // reactions live inside the message, bottom-left (Telegram style)
+        if (!post) androidx.compose.animation.AnimatedVisibility(
             visible = m.reactions.isNotEmpty() && !m.deleted,
             enter = androidx.compose.animation.expandVertically() + androidx.compose.animation.fadeIn(),
             exit = androidx.compose.animation.shrinkVertically() + androidx.compose.animation.fadeOut(),
@@ -759,6 +798,7 @@ private fun ImageContent(
     onImage: (File) -> Unit,
     loadImage: suspend () -> File?,
     onLongPress: () -> Unit,
+    showMeta: Boolean = true,
 ) {
     var file by remember(m.id) { mutableStateOf<File?>(null) }
     // real proportions of the photo, so it is shown whole (not cut to a square)
@@ -784,11 +824,33 @@ private fun ImageContent(
                 modifier = Modifier.fillMaxSize(),
             )
         } else CircularProgressIndicator(Modifier.size(24.dp), color = MaterialTheme.colorScheme.primary, strokeWidth = 2.dp)
-        Box(
+        if (showMeta) Box(
             Modifier.align(Alignment.BottomEnd).padding(6.dp)
                 .clip(RoundedCornerShape(10.dp)).background(Color.Black.copy(alpha = 0.45f))
                 .padding(horizontal = 7.dp, vertical = 2.dp)
         ) { Meta(m, Color.White) }
+    }
+}
+
+/** Caption under a photo / file (formatted, links clickable); the time follows it like in a text message. */
+@Composable
+private fun CaptionText(
+    text: String, fg: Color, mine: Boolean, primary: Color, post: Boolean,
+    onLink: (String, String) -> Unit, onLongPress: () -> Unit, modifier: Modifier = Modifier,
+    meta: @Composable () -> Unit,
+) {
+    Box(modifier) {
+        if (post) {
+            com.icqnew.app.presentation.emoji.RichText(
+                text, color = fg, linkColor = Color(0xFF3D9BFF), fontSize = 16.sp,
+                spoilerColor = MaterialTheme.colorScheme.surface, onLink = onLink, onLongPress = onLongPress,
+            )
+        } else TextWithMeta(
+            text, fg, rich = true, linkColor = if (mine) Color.White else Color(0xFF3D9BFF),
+            onLink = onLink, onLongPress = onLongPress,
+            spoilerColor = if (mine) primary else MaterialTheme.colorScheme.surface,
+            meta = meta,
+        )
     }
 }
 

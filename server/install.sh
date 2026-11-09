@@ -20,11 +20,18 @@ apt-get install -y python3 python3-venv python3-pip curl coturn iptables
 
 echo "==> Faýllar $DEST ýerine göçürilýär (baza we faýllar saklanýar)"
 mkdir -p "$DEST"
-cp "$SRC/server.py" "$SRC/requirements.txt" "$SRC/ssl.sh" "$DEST/"
+cp "$SRC/server.py" "$SRC/apkdelta.py" "$SRC/requirements.txt" "$SRC/ssl.sh" "$DEST/"
 # saýt (icq-new.ru) we web wersiýa (icq-new.online)
 rm -rf "$DEST/web" && cp -r "$SRC/web" "$DEST/web"
 # programma: server/apk/icq-new.apk goýsaň, saýtdan "Скачать" bilen ýüklenýär
-mkdir -p "$DEST/apk"
+mkdir -p "$DEST/apk/history"
+# köne wersiýany saklaýarys: telefonlar täzelenende diňe tapawudy (patch) ýükleýär
+if [ -f "$DEST/apk/icq-new.apk" ] && [ -f "$DEST/apk/version.json" ]; then
+  OLD_CODE=$(python3 -c 'import json,sys; print(int(json.load(open(sys.argv[1])).get("code") or 0))' "$DEST/apk/version.json" 2>/dev/null || echo 0)
+  if [ "$OLD_CODE" != "0" ] && [ ! -f "$DEST/apk/history/$OLD_CODE.apk" ]; then
+    cp "$DEST/apk/icq-new.apk" "$DEST/apk/history/$OLD_CODE.apk"
+  fi
+fi
 if [ -f "$SRC/apk/icq-new.apk" ]; then cp "$SRC/apk/icq-new.apk" "$DEST/apk/icq-new.apk"; fi
 # täze wersiýa barada maglumat (programma aşakda "Обновить" görkezýär)
 if [ -f "$SRC/apk/version.json" ]; then cp "$SRC/apk/version.json" "$DEST/apk/version.json"; fi

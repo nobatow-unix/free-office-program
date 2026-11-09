@@ -29,8 +29,8 @@ class AuthRepositoryImpl(
         if (token != null) Session(token, s.uin, s.name, s.avatarUrl, s.about, s.phone, s.username, s.verified) else null
     }
 
-    override suspend fun requestCode(phone: String) {
-        api.requestCode(phone)
+    override suspend fun requestCode(phone: String): Boolean {
+        return api.requestCode(phone).inApp
     }
 
     override suspend fun verify(phone: String, code: String, name: String?): VerifyResult {

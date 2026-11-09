@@ -162,6 +162,9 @@ data class ChatRow(
 
 @Dao
 interface ContactDao {
+    @Query("SELECT uin FROM contacts WHERE username = :un COLLATE NOCASE LIMIT 1")
+    suspend fun uinByUsername(un: String): Long?
+
     @Query("SELECT * FROM contacts WHERE isGroup = 0 ORDER BY name COLLATE NOCASE")
     fun observeAll(): Flow<List<ContactEntity>>
 
@@ -192,6 +195,9 @@ interface ContactDao {
 
 @Dao
 interface MemberDao {
+    @Query("SELECT uin FROM members WHERE username = :un COLLATE NOCASE LIMIT 1")
+    suspend fun uinByUsername(un: String): Long?
+
     @Query("SELECT * FROM members WHERE gid = :gid ORDER BY pos")
     fun observe(gid: Long): Flow<List<MemberEntity>>
 

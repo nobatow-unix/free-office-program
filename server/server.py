@@ -59,9 +59,11 @@ USERNAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{3,31}$")
 ATT_KINDS = ("image", "file", "voice", "video_note")
 # the server is a relay, not an archive: phones keep the history, the server forgets old messages
 KEEP_DAYS = int(os.environ.get("ICQ_KEEP_DAYS", "14"))
-TTL_CHOICES = (0, 3600, 86400, 7 * 86400, 30 * 86400)
+TTL_CHOICES = (0, 3600, 86400, 2 * 86400, 7 * 86400, 30 * 86400)
+DEFAULT_TTL = 2 * 86400  # everybody's messages vanish after 2 days unless the user turns it off
 UIN_START = 10_000_000
 BOT_UIN = UIN_START  # the official "ICQ Бот" account (people get UINs from 10000001)
+SERVICE_UIN = 777000  # "ICQ" service account: login codes and new-device alerts (like Telegram's 777000)
 CODE_TTL_MS = 10 * 60 * 1000
 RESEND_MS = 30 * 1000
 MAX_ATTEMPTS = 5
@@ -252,6 +254,8 @@ def init_db() -> None:
         # auto-delete timers
         _add_column(c, "messages", "expire_at INTEGER NOT NULL DEFAULT 0")
         _add_column(c, "groups", "ttl INTEGER NOT NULL DEFAULT 0")
+        # personal auto-delete default (applies to private chats without their own timer, and to new groups)
+        _add_column(c, "users", f"default_ttl INTEGER NOT NULL DEFAULT {DEFAULT_TTL}")
         c.executescript(
             """
             CREATE TABLE IF NOT EXISTS chat_ttl(a INTEGER NOT NULL, b INTEGER NOT NULL, ttl INTEGER NOT NULL,
@@ -285,6 +289,11 @@ def init_db() -> None:
             "INSERT OR IGNORE INTO users(uin, name, phone, phone_key, about, verified, username, created, last_seen)"
             " VALUES(?, 'ICQ Бот', 'bot', 'bot', 'Официальный бот ICQ New. Напишите /help', 1, 'icqbot', ?, ?)",
             (BOT_UIN, int(time.time() * 1000), int(time.time() * 1000)),
+        )
+        c.execute(
+            "INSERT OR IGNORE INTO users(uin, name, phone, phone_key, about, verified, username, created, last_seen)"
+            " VALUES(?, 'ICQ', 'service', 'service', 'Служебные уведомления: коды входа и новые устройства', 1, 'icq', ?, ?)",
+            (SERVICE_UIN, int(time.time() * 1000), int(time.time() * 1000)),
         )
         c.executescript(
             """
@@ -439,7 +448,7 @@ def visible_avatar(row: sqlite3.Row, viewer: int, c: Optional[sqlite3.Connection
 
 def visible_phone(row: sqlite3.Row, viewer: int, c: Optional[sqlite3.Connection] = None) -> str:
     phone = _col(row, "phone", "") or ""
-    if not phone or phone == "bot" or row["uin"] == BOT_UIN:
+    if not phone or phone in ("bot", "service") or row["uin"] in (BOT_UIN, SERVICE_UIN):
         return ""
     if viewer == row["uin"]:
         return phone
@@ -468,8 +477,9 @@ def user_json(row: sqlite3.Row, full: bool = False, viewer: Optional[int] = None
         "avatar_url": row["avatar_url"] if full else visible_avatar(row, v, c),
         "about": row["about"] or "",
         # online is always shown; a hidden last-seen time is shown as "recently"
-        "online": False if row["uin"] == BOT_UIN else manager.online(row["uin"]),
+        "online": False if row["uin"] in (BOT_UIN, SERVICE_UIN) else manager.online(row["uin"]),
         "bot": row["uin"] == BOT_UIN,
+        "service": row["uin"] == SERVICE_UIN,
         "last_seen": row["last_seen"] if visible else 0,
         "username": row["username"],
         "verified": bool(row["verified"]),
@@ -852,6 +862,8 @@ def ping() -> dict:
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 APK_PATH = os.environ.get("ICQ_APK", os.path.join(os.path.dirname(os.path.abspath(__file__)), "apk", "icq-new.apk"))
+from apkdelta import Deltas  # noqa: E402  (delta updates: apk/history + apk/patches)
+DELTAS = Deltas(APK_PATH)
 
 
 def _page(name: str) -> HTMLResponse:
@@ -934,7 +946,18 @@ def app_version() -> dict:
         "code": int(v.get("code") or 0), "name": str(v.get("name") or ""),
         "notes": str(v.get("notes") or ""), "url": "/download",
         "size": os.path.getsize(APK_PATH) if os.path.exists(APK_PATH) else 0,
+        "sha256": DELTAS.sha(),
     }
+
+
+@app.get("/api/app/patch/{old_code}")
+def app_patch(old_code: int):
+    """Only the difference between the phone's version and the new one (much smaller than the APK)."""
+    cur = DELTAS.current_code()
+    p = DELTAS.patch_path(old_code, cur)
+    if not os.path.exists(p):
+        raise HTTPException(404, "Патча нет — скачайте APK целиком")
+    return FileResponse(p, media_type="application/octet-stream", filename=os.path.basename(p))
 
 
 @app.get("/download")
@@ -1011,7 +1034,7 @@ async def geo(request: Request, sim: str = Query("")) -> dict:
 
 
 @app.post("/api/auth/request")
-def request_code(body: CodeRequestIn) -> dict:
+async def request_code(body: CodeRequestIn) -> dict:
     phone = norm_phone(body.phone)
     if not (9 <= len(phone) <= 15):
         raise HTTPException(400, "Введите номер телефона в международном формате")
@@ -1030,11 +1053,24 @@ def request_code(body: CodeRequestIn) -> dict:
             (phone, code, now),
         )
     notify_admin(phone, code)
-    return {"ok": True, "retry_in": RESEND_MS // 1000}
+    in_app = False
+    with conn() as c:
+        u = c.execute("SELECT uin FROM users WHERE phone=?", (phone,)).fetchone()
+        if u and c.execute("SELECT 1 FROM tokens WHERE uin=? LIMIT 1", (u["uin"],)).fetchone():
+            in_app = True
+            uin_for_code = u["uin"]
+    if in_app:
+        asyncio.create_task(service_send(
+            uin_for_code,
+            f"🔑 Код для входа в ICQ New: **{code}**\n\n"
+            "Никому не сообщайте этот код, даже сотрудникам ICQ. "
+            "Если вы не запрашивали код — просто проигнорируйте это сообщение.",
+        ))
+    return {"ok": True, "retry_in": RESEND_MS // 1000, "in_app": in_app}
 
 
 @app.post("/api/auth/verify")
-async def verify_code(body: VerifyIn) -> dict:
+async def verify_code(body: VerifyIn, request: Request) -> dict:
     phone = norm_phone(body.phone)
     now = now_ms()
     new_user_row = None
@@ -1069,12 +1105,29 @@ async def verify_code(body: VerifyIn) -> dict:
             user = c.execute("SELECT * FROM users WHERE uin=?", (uin,)).fetchone()
             # a new account is NOT announced and NOT added to anybody's contacts automatically
         c.execute("DELETE FROM otp WHERE phone=?", (phone,))
+        had_sessions = c.execute("SELECT 1 FROM tokens WHERE uin=? LIMIT 1", (user["uin"],)).fetchone() is not None
         token = secrets.token_hex(32)
+        device = (body.device or "Android")[:60]
         c.execute(
             "INSERT INTO tokens(token, uin, created, device, last_used) VALUES(?,?,?,?,?)",
-            (token, user["uin"], now, (body.device or "Android")[:60], now),
+            (token, user["uin"], now, device, now),
         )
+    asyncio.create_task(announce_login(user["uin"], device, client_ip(request), had_sessions))
     return {"token": token, "user": me_json(user)}
+
+
+async def announce_login(uin: int, device: str, ip: str, had_sessions: bool) -> None:
+    """«ICQ» tells about every new sign-in (device, IP, time), like Telegram does."""
+    when = time.strftime("%d.%m.%Y %H:%M", time.gmtime(time.time() + 3 * 3600)) + " (МСК)"
+    text = (
+        "🔐 **Новый вход в ваш аккаунт**\n\n"
+        f"📱 Устройство: {device}\n"
+        + (f"🌐 IP: {ip}\n" if ip else "")
+        + f"🕒 Время: {when}\n\n"
+        + ("Если это были не вы — откройте Настройки → Устройства и завершите этот сеанс."
+           if had_sessions else "Добро пожаловать в ICQ New! Здесь будут коды входа и уведомления о новых устройствах.")
+    )
+    await service_send(uin, text)
 
 
 # ---------------------------------------------------------------------- profile
@@ -2010,8 +2063,10 @@ async def create_group(body: GroupCreateIn, authorization: Optional[str] = Heade
     now = now_ms()
     with conn() as c:
         cur = c.execute(
-            "INSERT INTO groups(name, owner, created, kind, about, public) VALUES(?,?,?,?,?,?)",
-            (name, uin, now, kind, (body.about or "").strip()[:255], int(body.public)),
+            "INSERT INTO groups(name, owner, created, kind, about, public, ttl) VALUES(?,?,?,?,?,?,?)",
+            (name, uin, now, kind, (body.about or "").strip()[:255], int(body.public),
+             0 if kind == "channel" else  # channel posts stay
+             (_col(c.execute("SELECT default_ttl FROM users WHERE uin=?", (uin,)).fetchone(), "default_ttl", 0) or 0)),
         )
         gid = cur.lastrowid
         c.execute("INSERT INTO group_members(gid, uin, joined, role) VALUES(?,?,?, 'owner')", (gid, uin, now))
@@ -2267,11 +2322,14 @@ def chat_ttl_of(c: sqlite3.Connection, sender: int, to: Optional[int], gid: Opti
     if gid:
         g = c.execute("SELECT ttl FROM groups WHERE id=?", (gid,)).fetchone()
         return (g["ttl"] if g else 0) or 0
-    if not to:
+    if not to or to == sender:  # "Saved messages" are never auto-deleted
         return 0
     a, b = min(sender, to), max(sender, to)
     r = c.execute("SELECT ttl FROM chat_ttl WHERE a=? AND b=?", (a, b)).fetchone()
-    return r["ttl"] if r else 0
+    if r:  # the chat has its own timer (0 = switched off for this chat)
+        return r["ttl"]
+    u = c.execute("SELECT default_ttl FROM users WHERE uin=?", (sender,)).fetchone()
+    return (_col(u, "default_ttl", 0) or 0) if u else 0
 
 
 class TtlIn(BaseModel):
@@ -2281,7 +2339,30 @@ class TtlIn(BaseModel):
 
 
 def _ttl_label(sec: int) -> str:
-    return {0: "выключено", 3600: "1 час", 86400: "1 день", 7 * 86400: "1 неделя", 30 * 86400: "1 месяц"}.get(sec, f"{sec} с")
+    return {0: "выключено", 3600: "1 час", 86400: "1 день", 2 * 86400: "2 дня", 7 * 86400: "1 неделя",
+            30 * 86400: "1 месяц"}.get(sec, f"{sec} с")
+
+
+class DefaultTtlIn(BaseModel):
+    seconds: int = DEFAULT_TTL
+
+
+@app.get("/api/me/ttl")
+def get_default_ttl(authorization: Optional[str] = Header(None)) -> dict:
+    uin = require_uin(authorization)
+    with conn() as c:
+        u = c.execute("SELECT default_ttl FROM users WHERE uin=?", (uin,)).fetchone()
+        return {"seconds": (_col(u, "default_ttl", 0) or 0) if u else 0}
+
+
+@app.post("/api/me/ttl")
+def set_default_ttl(body: DefaultTtlIn, authorization: Optional[str] = Header(None)) -> dict:
+    """Settings → auto-delete for all my chats (0 = off)."""
+    uin = require_uin(authorization)
+    sec = body.seconds if body.seconds in TTL_CHOICES else DEFAULT_TTL
+    with conn() as c:
+        c.execute("UPDATE users SET default_ttl=? WHERE uin=?", (sec, uin))
+    return {"seconds": sec}
 
 
 @app.get("/api/chats/ttl")
@@ -2527,7 +2608,7 @@ class QrApproveIn(BaseModel):
 
 
 @app.post("/api/qr/approve")
-def qr_approve(body: QrApproveIn, request: Request, authorization: Optional[str] = Header(None)) -> dict:
+async def qr_approve(body: QrApproveIn, request: Request, authorization: Optional[str] = Header(None)) -> dict:
     uin = require_uin(authorization)
     code = body.code.strip().removeprefix("icqnew-login:")
     with conn() as c:
@@ -2541,6 +2622,7 @@ def qr_approve(body: QrApproveIn, request: Request, authorization: Optional[str]
             (token, uin, now_ms(), "Web · " + agent, now_ms()),
         )
         c.execute("UPDATE qr_logins SET token=?, uin=? WHERE code=?", (token, uin, code))
+    asyncio.create_task(announce_login(uin, "Веб-версия (вход по QR-коду)", "", True))
     return {"ok": True}
 
 
@@ -2602,6 +2684,7 @@ async def cleanup_loop() -> None:
 
 @app.on_event("startup")
 async def _start_cleanup() -> None:
+    DELTAS.start()  # archive the served APK, build patches from older versions in the background
     asyncio.create_task(cleanup_loop())
     asyncio.create_task(expire_loop())
 
@@ -2857,7 +2940,7 @@ def admin_pending(_: None = Depends(require_admin)) -> dict:
         rows = c.execute(
             "SELECT phone, code, created, attempts, sent FROM otp ORDER BY created DESC LIMIT 100"
         ).fetchall()
-        users = c.execute("SELECT COUNT(*) AS n FROM users WHERE uin<>?", (BOT_UIN,)).fetchone()["n"]
+        users = c.execute("SELECT COUNT(*) AS n FROM users WHERE uin NOT IN (?, ?)", (BOT_UIN, SERVICE_UIN)).fetchone()["n"]
         msgs = c.execute("SELECT COUNT(*) AS n FROM messages WHERE kind<>'system'").fetchone()["n"]
         groups = c.execute("SELECT COUNT(*) AS n FROM groups WHERE kind<>'channel'").fetchone()["n"]
         channels = c.execute("SELECT COUNT(*) AS n FROM groups WHERE kind='channel'").fetchone()["n"]
@@ -3196,6 +3279,9 @@ async def handle_message(sender: int, ws: WebSocket, data: dict) -> None:
                         await fail(ws, client_id, f"Медленный режим: подождите {wait // 1000 + 1} с")
                         return
             to = 0
+        elif to == SERVICE_UIN:
+            await fail(ws, client_id, "Это служебный чат ICQ: сюда нельзя писать")
+            return
         elif to == sender:
             cmd_args = None  # "Saved messages": a chat with yourself
         else:
@@ -3437,6 +3523,28 @@ def bot_text_for(c: sqlite3.Connection, uin: int, text: str, kind: str) -> str:
     if any(w in low for w in ("спасибо", "sag bol", "sagbol", "thanks", "thank")):
         return "Пожалуйста! 🙌"
     return "Я не понял 🤔 Напишите /help, чтобы увидеть, что я умею."
+
+
+async def service_send(uin: int, text: str) -> None:
+    """A message from the «ICQ» service account (login codes, new devices)."""
+    with conn() as c:
+        c.execute("INSERT OR IGNORE INTO contacts(owner, contact) VALUES(?,?)", (uin, SERVICE_UIN))
+        cur = c.execute(
+            "INSERT INTO messages(client_id, from_uin, to_uin, text, ts, kind, rev) VALUES(?,?,?,?,?,'text',?)",
+            ("svc-" + secrets.token_hex(8), SERVICE_UIN, uin, text[:4000], now_ms(), next_rev(c)),
+        )
+        row = c.execute("SELECT * FROM messages WHERE id=?", (cur.lastrowid,)).fetchone()
+        msg = msg_json(c, row)
+        push_message(c, row, [uin])
+    await manager.send(uin, {"type": "message", "message": msg})
+
+
+def client_ip(request: Optional[Request]) -> str:
+    if request is None:
+        return ""
+    h = request.headers
+    ip = (h.get("x-forwarded-for") or "").split(",")[0].strip() or h.get("x-real-ip") or (request.client.host if request.client else "")
+    return ip
 
 
 async def bot_send(uin: int, text: str) -> None:

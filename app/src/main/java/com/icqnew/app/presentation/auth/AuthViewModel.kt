@@ -26,6 +26,8 @@ data class AuthUiState(
     val done: Boolean = false,
     /** Country code that was detected automatically ("+993"). */
     val autoDial: String = "",
+    /** the code went to the «ICQ» chat on another logged-in device */
+    val codeInApp: Boolean = false,
 )
 
 /** Phone + one-time code login. The code is delivered to the user by the admin (SMS from his own number). */
@@ -68,8 +70,8 @@ class AuthViewModel(
         _state.update { it.copy(loading = true, error = null) }
         viewModelScope.launch {
             try {
-                requestCode(s.phone)
-                _state.update { it.copy(step = AuthStep.CODE, code = "", loading = false, resendIn = 30) }
+                val inApp = requestCode(s.phone)
+                _state.update { it.copy(step = AuthStep.CODE, code = "", loading = false, resendIn = 30, codeInApp = inApp) }
                 countdown()
             } catch (e: Exception) {
                 _state.update { it.copy(loading = false, error = e.userMessage()) }

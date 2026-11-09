@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.SwipeLeft
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -119,6 +120,9 @@ fun SettingsTab(
     var editUsername by remember { mutableStateOf(false) }
     var pickSound by remember { mutableStateOf(false) }
     var pickSwipe by remember { mutableStateOf(false) }
+    var pickTtl by remember { mutableStateOf(false) }
+    val defaultTtl by vm.defaultTtl.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { vm.loadDefaultTtl() }
     val sessions by vm.sessions.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { vm.loadSessions() }
     var nameInput by remember { mutableStateOf("") }
@@ -209,6 +213,10 @@ fun SettingsTab(
 
         // ---- chats ----
         Section("Чаты") {
+            Line(
+                Icons.Filled.Timer, "Автоудаление сообщений",
+                if (defaultTtl < 0) "…" else ttlName(defaultTtl), arrow = true,
+            ) { pickTtl = true }
             Line(Icons.Filled.SwipeLeft, "Свайп влево по чату", swipeLabel(app.swipeAction), arrow = true) { pickSwipe = true }
             Line(Icons.Filled.Wallpaper, "Фон чатов", null, arrow = true) { pickWallpaper = true }
             Line(Icons.Filled.FormatSize, "Размер текста", "${(app.fontScale * 100).toInt()}%")
@@ -309,6 +317,15 @@ fun SettingsTab(
             selected = app.soundChoice,
             onPick = { v -> vm.setSoundChoice(v); player.preview(v) },
             onDismiss = { pickSound = false },
+        )
+    }
+    if (pickTtl) {
+        ChoiceDialog(
+            title = "Автоудаление во всех чатах",
+            options = listOf(0, 86400, 2 * 86400, 7 * 86400, 30 * 86400).map { it.toString() to ttlName(it) },
+            selected = defaultTtl.toString(),
+            onPick = { v -> vm.setDefaultTtl(v.toInt()); pickTtl = false },
+            onDismiss = { pickTtl = false },
         )
     }
     if (pickSwipe) {
@@ -554,6 +571,16 @@ fun swipeLabel(v: String) = when (v) {
     "mute" -> "Без звука"
     "read" -> "Прочитано"
     else -> "Удалить"
+}
+
+private fun ttlName(sec: Int): String = when (sec) {
+    0 -> "Выключено"
+    3600 -> "1 час"
+    86400 -> "1 день"
+    2 * 86400 -> "2 дня"
+    7 * 86400 -> "1 неделя"
+    30 * 86400 -> "1 месяц"
+    else -> "$sec с"
 }
 
 @Composable

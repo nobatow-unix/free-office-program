@@ -20,6 +20,7 @@ import androidx.compose.material.icons.automirrored.filled.CallMade
 import androidx.compose.material.icons.automirrored.filled.CallMissed
 import androidx.compose.material.icons.automirrored.filled.CallReceived
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.ErrorOutline
@@ -53,6 +54,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -84,6 +88,99 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private data class Tab(val title: String, val icon: ImageVector)
+
+/** Telegram-like: while the update downloads, a ring with a down arrow fills up in the top bar. */
+@Composable
+private fun UpdateProgressCircle(updater: com.icqnew.app.data.update.Updater) {
+    val st by updater.state.collectAsStateWithLifecycle()
+    val p = st.progress
+    androidx.compose.animation.AnimatedVisibility(
+        visible = p != null,
+        enter = androidx.compose.animation.scaleIn() + androidx.compose.animation.fadeIn(),
+        exit = androidx.compose.animation.scaleOut() + androidx.compose.animation.fadeOut(),
+    ) {
+        val anim by androidx.compose.animation.core.animateFloatAsState(p ?: 1f, label = "upd")
+        val bounce = androidx.compose.animation.core.rememberInfiniteTransition(label = "arrow")
+        val dy by bounce.animateFloat(
+            -1.5f, 1.5f,
+            androidx.compose.animation.core.infiniteRepeatable(
+                androidx.compose.animation.core.tween(600), androidx.compose.animation.core.RepeatMode.Reverse,
+            ),
+            label = "dy",
+        )
+        Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(
+                progress = { anim.coerceIn(0.02f, 1f) }, modifier = Modifier.size(28.dp), strokeWidth = 2.5.dp,
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
+            )
+            Icon(
+                Icons.Filled.ArrowDownward, "Загрузка обновления", tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(15.dp).offset(y = dy.dp),
+            )
+        }
+    }
+}
+
+private val TAB_COLORS = listOf(
+    Color(0xFF22C55E), // personal: green (like the phone icon)
+    Color(0xFF2F8CFF), // groups: blue (like messages)
+    Color(0xFFFF8A00), // channels: orange
+    Color(0xFF7C5CFF), // bots: violet
+    Color(0xFFF2385A), // profile: red
+)
+
+/** A tab drawn as a rounded-square app icon with a soft gradient; the chosen one is bigger and lit. */
+@Composable
+private fun SquircleTab(
+    title: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    color: Color,
+    selected: Boolean,
+    badge: Int,
+    avatar: (@Composable () -> Unit)?,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val scale by androidx.compose.animation.core.animateFloatAsState(
+        if (selected) 1.06f else 0.9f, androidx.compose.animation.core.spring(dampingRatio = 0.55f), label = "tab",
+    )
+    val shape = RoundedCornerShape(32)
+    Column(
+        modifier.clip(RoundedCornerShape(14.dp))
+            .clickable(
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                indication = null, onClick = onClick,
+            )
+            .padding(vertical = 2.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(Modifier.size(46.dp), contentAlignment = Alignment.Center) {
+            Box(
+                Modifier.size(40.dp).graphicsLayer { scaleX = scale; scaleY = scale; alpha = if (selected) 1f else 0.78f }
+                    .shadow(if (selected) 6.dp else 0.dp, shape, clip = false, spotColor = color)
+                    .clip(shape)
+                    .background(
+                        if (avatar != null) Brush.verticalGradient(listOf(Color.Transparent, Color.Transparent))
+                        else Brush.verticalGradient(listOf(androidx.compose.ui.graphics.lerp(color, Color.White, 0.22f), color))
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (avatar != null) avatar() else Icon(icon, null, Modifier.size(22.dp), tint = Color.White)
+            }
+            if (badge > 0) {
+                com.icqnew.app.presentation.components.CountBadge(
+                    badge, small = true, modifier = Modifier.align(Alignment.TopEnd).offset(x = 4.dp, y = (-2).dp),
+                )
+            }
+        }
+        Text(
+            title, fontSize = 11.sp, maxLines = 1,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
 
 private val TABS = listOf(
     Tab("Личные", IcqIcons.Chats),
@@ -266,8 +363,8 @@ fun HomeScreen(
                         }
                     },
                     actions = {
+                        UpdateProgressCircle(container.updater)
                         IconButton(onClick = onSearch) { Icon(Icons.Filled.Search, contentDescription = "Поиск") }
-
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = MaterialTheme.colorScheme.background,
@@ -336,14 +433,12 @@ fun HomeScreen(
         bottomBar = {
             Column {
             UpdateBanner(container.updater)
-            NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainerLow, tonalElevation = 0.dp) {
-                val colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = MaterialTheme.colorScheme.primary,
-                    selectedTextColor = MaterialTheme.colorScheme.primary,
-                    indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            // One UI–style bar: every tab is a colourful "squircle" app icon
+            Row(
+                Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainerLow)
+                    .navigationBarsPadding().padding(top = 6.dp, bottom = 4.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+            ) {
                 TABS.forEachIndexed { i, t ->
                     val badge = when (i) {
                         0 -> unreadOf(personal)
@@ -352,20 +447,13 @@ fun HomeScreen(
                         3 -> unreadOf(bots)
                         else -> 0
                     }
-                    NavigationBarItem(
-                        selected = tab == i, onClick = { if (tab == i && i == 4) profilePage = null; tab = i }, colors = colors,
-                        icon = {
-                            BadgedBox(badge = {
-                                if (badge > 0) Badge { Text(if (badge > 99) "99+" else badge.toString()) }
-                            }) {
-                                if (i == 4 && session != null) {
-                                    Avatar(session!!.name, session!!.uin, session!!.avatarUrl, false, 26.dp, isSelf = false, storyRing = false)
-                                } else {
-                                    Icon(t.icon, null, Modifier.size(24.dp))
-                                }
-                            }
-                        },
-                        label = { Text(t.title, fontSize = 11.sp, maxLines = 1) },
+                    SquircleTab(
+                        title = t.title, icon = t.icon, color = TAB_COLORS[i], selected = tab == i, badge = badge,
+                        avatar = if (i == 4 && session != null) ({
+                            Avatar(session!!.name, session!!.uin, session!!.avatarUrl, false, 40.dp, isSelf = false, storyRing = false)
+                        }) else null,
+                        onClick = { if (tab == i && i == 4) profilePage = null; tab = i },
+                        modifier = Modifier.weight(1f),
                     )
                 }
             }
@@ -534,7 +622,7 @@ private fun ArchiveRow(chats: List<ChatPreview>, onClick: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp,
             )
         }
-        if (unread > 0) Badge(containerColor = Color(0xFF6B7B8C)) { Text(unread.toString()) }
+        if (unread > 0) com.icqnew.app.presentation.components.CountBadge(unread, muted = true)
     }
 }
 
@@ -798,10 +886,13 @@ private fun ChatListItem(
                         )
                         Spacer(Modifier.width(3.dp))
                     }
-                    EmojiText(
+                    // the preview keeps bold / italic / spoiler … exactly like the message itself
+                    com.icqnew.app.presentation.emoji.RichText(
                         prefix + chat.lastText.replace('\n', ' '),
                         color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 15.sp,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        linkColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        spoilerColor = MaterialTheme.colorScheme.background,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, interactive = false,
                     )
                 }
             }
@@ -818,33 +909,17 @@ private fun ChatListItem(
             if (mentioned) {
                 // somebody tagged me here
                 Box(
-                    Modifier.size(22.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary),
+                    Modifier.size(20.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary),
                     contentAlignment = Alignment.Center,
-                ) { Text("@", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold) }
+                ) { Text("@", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
                 Spacer(Modifier.width(4.dp))
             }
             if (chat.unread > 0) {
-                Box(
-                    Modifier
-                        .defaultMinSize(minWidth = 22.dp, minHeight = 22.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (chat.muted) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                            else MaterialTheme.colorScheme.primary
-                        )
-                        .padding(horizontal = 6.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        if (chat.unread > 99) "99+" else chat.unread.toString(),
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        fontSize = 12.sp, fontWeight = FontWeight.Bold,
-                    )
-                }
+                com.icqnew.app.presentation.components.CountBadge(chat.unread, muted = chat.muted)
             } else if (chat.pinned) {
                 Icon(Icons.Filled.PushPin, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
             } else if (!mentioned) {
-                Spacer(Modifier.height(22.dp))
+                Spacer(Modifier.height(20.dp))
             }
             }
         }

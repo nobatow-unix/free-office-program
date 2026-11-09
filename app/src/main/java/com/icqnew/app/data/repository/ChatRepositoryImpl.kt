@@ -298,7 +298,8 @@ class ChatRepositoryImpl(
 
     override suspend fun sendAttachment(
         peer: Long, kind: MessageKind, file: File, name: String, mime: String, durMs: Long, replyTo: Long?,
-    ) = enqueue(peer, kind, "", AttMeta(file, name, mime, durMs), replyTo, null, null)
+        caption: String,
+    ) = enqueue(peer, kind, caption.trim().take(4000), AttMeta(file, name, mime, durMs), replyTo, null, null)
 
     override suspend fun forward(message: ChatMessage, targets: List<Long>, originalSender: String) {
         for (peer in targets) {
@@ -613,10 +614,20 @@ class ChatRepositoryImpl(
     override suspend fun lookupPhone(phone: String): User? =
         runCatching { api.lookup(phone) }.getOrNull()?.takeIf { it.found }?.user?.toDomain()
 
-    override suspend fun resolveMention(username: String): Long? = runCatching {
-        val r = api.resolve(username)
-        r.user?.let { contactDao.upsert(it.toEntity()); it.uin } ?: r.group?.let { -it.id }
-    }.getOrNull()
+    override suspend fun resolveMention(username: String): Long? {
+        val un = username.trim().removePrefix("@")
+        val me = store.snapshot()
+        if (me.username.equals(un, ignoreCase = true)) return me.uin // my own @name
+        val r = runCatching { api.resolve(un) }.getOrNull()
+        r?.user?.let { u ->
+            // only cache people we do not know yet (never overwrite an existing chat entry)
+            if (u.uin != me.uin && contactDao.get(u.uin) == null) runCatching { contactDao.upsert(u.toEntity()) }
+            return u.uin
+        }
+        r?.group?.let { return -it.id }
+        // offline / old server: people we already know locally
+        return runCatching { memberDao.uinByUsername(un) ?: contactDao.uinByUsername(un) }.getOrNull()
+    }
 
     override suspend fun approveWebLogin(qr: String) {
         api.approveQr(qr)
@@ -782,6 +793,12 @@ class ChatRepositoryImpl(
             id.toLongOrNull()?.let { messageDao.setViews(it, n) }
         }
     }
+
+    override suspend fun defaultTtl(): Int = api.defaultTtl().seconds
+
+    override suspend fun setDefaultTtl(seconds: Int): Int = api.setDefaultTtl(seconds).seconds
+
+    override suspend fun fetchUserFresh(uin: Long): User? = runCatching { api.user(uin).toDomain() }.getOrNull()
 
     override suspend fun publicPosts(gid: Long): List<ChatMessage> = runCatching {
         val me = store.snapshot().uin
@@ -1118,8 +1135,8 @@ class ChatRepositoryImpl(
         when (MessageKind.fromWire(kind)) {
             MessageKind.TEXT, MessageKind.SYSTEM, MessageKind.BOT -> text
             MessageKind.STICKER -> "$text Стикер"
-            MessageKind.IMAGE -> "📷 Фото"
-            MessageKind.FILE -> "📎 " + (attName ?: "Файл")
+            MessageKind.IMAGE -> "📷 " + text.ifBlank { "Фото" }
+            MessageKind.FILE -> "📎 " + text.ifBlank { attName ?: "Файл" }
             MessageKind.VOICE -> "🎤 Голосовое сообщение"
             MessageKind.VIDEO_NOTE -> "⏺ Видеосообщение"
             MessageKind.POLL -> "📊 $text"

@@ -63,7 +63,23 @@ class Updater(private val context: Context, private val api: IcqApi, private val
                 val dir = File(context.cacheDir, "updates").apply { mkdirs() }
                 dir.listFiles()?.forEach { it.delete() }
                 val f = File(dir, "ICQ-New-${v.name.ifBlank { v.code.toString() }}.apk")
-                api.downloadUpdate(v.url, f) { p -> _state.value = _state.value.copy(progress = p) }
+                // 1) only the difference from the installed version (usually a few MB),
+                // 2) if there is no patch or the result does not match — the whole APK
+                val viaPatch = v.sha256.isNotBlank() && runCatching {
+                    val patch = File(dir, "update.icqdiff")
+                    api.downloadUpdate("/api/app/patch/$currentCode", patch) { p ->
+                        _state.value = _state.value.copy(progress = p * 0.9f)
+                    }
+                    withContext(Dispatchers.Default) {
+                        DeltaPatch.apply(File(context.applicationInfo.sourceDir), patch, f)
+                    }
+                    patch.delete()
+                    DeltaPatch.sha256(f).equals(v.sha256, ignoreCase = true)
+                }.getOrDefault(false)
+                if (!viaPatch) {
+                    f.delete()
+                    api.downloadUpdate(v.url, f) { p -> _state.value = _state.value.copy(progress = p) }
+                }
                 _state.value = _state.value.copy(progress = null)
                 withContext(Dispatchers.Main) { install(f) }
             } catch (e: Exception) {

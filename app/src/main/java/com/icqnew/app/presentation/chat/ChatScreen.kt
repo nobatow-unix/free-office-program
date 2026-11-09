@@ -155,6 +155,7 @@ fun ChatScreen(
     var fileViewer by remember { mutableStateOf<ChatMessage?>(null) }
     var creatingPoll by remember { mutableStateOf(false) }
     var attachSheet by remember { mutableStateOf(false) }
+    var pendingFiles by remember { mutableStateOf<List<PendingFile>>(emptyList()) }
     var actionsFor by remember { mutableStateOf<ChatMessage?>(null) }
     var forwarding by remember { mutableStateOf<ChatMessage?>(null) }
     var deleting by remember { mutableStateOf<ChatMessage?>(null) }
@@ -235,7 +236,8 @@ fun ChatScreen(
     val isChannel = group?.isChannel == true || peer?.isChannel == true
     val iAmAdmin = group?.iAmAdmin == true
     val mutedUntil = group?.myMutedUntil ?: 0L
-    val canWrite = !(isChannel && !iAmAdmin) && !prefs.blocked
+    val isService = uin == com.icqnew.app.domain.SERVICE_UIN
+    val canWrite = !(isChannel && !iAmAdmin) && !prefs.blocked && !isService
     val botUser = com.icqnew.app.domain.User(
         0, group?.botName ?: "ICQ Бот", group?.botAvatar, false, 0, verified = true,
     )
@@ -322,7 +324,7 @@ fun ChatScreen(
         scope.launch {
             val p = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { FileUtils.copyToOutbox(context, uri) }
             if (p == null) Toast.makeText(context, "Файл слишком большой (максимум 4 ГБ)", Toast.LENGTH_LONG).show()
-            else vm.sendFile(p.file, p.name, p.mime)
+            else pendingFiles = pendingFiles + PendingFile(p.file, p.name, p.mime) // caption sheet opens
         }
     }
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -357,7 +359,7 @@ fun ChatScreen(
                 cameraFile = null
                 val out = FileUtils.newCameraFile(context)
                 out.writeBytes(bytes)
-                vm.sendFile(out, "photo_" + System.currentTimeMillis() + ".jpg", "image/jpeg")
+                pendingFiles = pendingFiles + PendingFile(out, "photo_" + System.currentTimeMillis() + ".jpg", "image/jpeg")
             },
         )
     }
@@ -391,24 +393,10 @@ fun ChatScreen(
             vm.sendVideoNote(f, dur)
         } else f?.delete()
     }
+    // round video messages are recorded inside the app (CameraX): flip camera, flash
+    var recordingNote by remember { mutableStateOf(false) }
     fun openVideoNote() {
-        try {
-            val dir = File(context.filesDir, "outbox").apply { mkdirs() }
-            val f = File(dir, "videonote_" + System.currentTimeMillis() + ".mp4")
-            videoNoteFile = f
-            val uri = FileProvider.getUriForFile(context, context.packageName + ".files", f)
-            val intent = android.content.Intent(android.provider.MediaStore.ACTION_VIDEO_CAPTURE)
-                .putExtra(android.provider.MediaStore.EXTRA_OUTPUT, uri)
-                .putExtra(android.provider.MediaStore.EXTRA_DURATION_LIMIT, 60)
-                .putExtra(android.provider.MediaStore.EXTRA_VIDEO_QUALITY, 0)
-                .putExtra("android.intent.extras.CAMERA_FACING", 1)
-                .putExtra("android.intent.extras.LENS_FACING_FRONT", 1)
-                .putExtra("android.intent.extra.USE_FRONT_CAMERA", true)
-                .addFlags(android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION or android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            videoNoteLauncher.launch(intent)
-        } catch (e: Exception) {
-            Toast.makeText(context, "Камера недоступна", Toast.LENGTH_SHORT).show()
-        }
+        recordingNote = true
     }
     val videoNotePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r ->
         if (r[Manifest.permission.CAMERA] == true) openVideoNote()
@@ -465,10 +453,12 @@ fun ChatScreen(
     Scaffold(
         topBar = {
             TopAppBar(
+                expandedHeight = 54.dp, // compact header (was 64 dp)
                 navigationIcon = {
                     IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад") }
                 },
                 title = {
+                    ProvideTextStyle(MaterialTheme.typography.titleMedium) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.clickable(
@@ -480,15 +470,16 @@ fun ChatScreen(
                     ) {
                         Avatar(
                             title, uin, peer?.avatarUrl ?: group?.avatarUrl,
-                            !isGroup && peer?.online == true && !isSaved, 40.dp, isGroup = isGroup, isChannel = isChannel,
+                            !isGroup && peer?.online == true && !isSaved, 36.dp, isGroup = isGroup, isChannel = isChannel,
                             isSelf = isSaved,
                         )
-                        Spacer(Modifier.width(12.dp))
+                        Spacer(Modifier.width(10.dp))
                         Column {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 com.icqnew.app.presentation.components.NameLine(
                                     title, verified = peer?.verified == true || group?.verified == true,
-                                    fontSize = 17.sp, modifier = Modifier.weight(1f, fill = false), bot = uin == com.icqnew.app.domain.BOT_UIN,
+                                    fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.weight(1f, fill = false), bot = uin == com.icqnew.app.domain.BOT_UIN,
                                 )
                                 if (prefs.muted) {
                                     Spacer(Modifier.width(4.dp))
@@ -502,18 +493,19 @@ fun ChatScreen(
                                 com.icqnew.app.presentation.components.TypingLabel(subtitle, MaterialTheme.colorScheme.primary)
                             } else if (subtitle.isNotEmpty()) {
                                 Text(
-                                    subtitle, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    subtitle, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, lineHeight = 14.sp,
                                     color = if (highlight && !isSaved) MaterialTheme.colorScheme.primary
                                     else MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
                         }
                     }
+                    }
                 },
                 actions = {
-                    if (!isGroup && !prefs.blocked && !isSaved && !isBotChat) {
-                        IconButton(onClick = { call(true) }) { Icon(IcqIcons.Video, "Видеозвонок") }
-                        IconButton(onClick = { call(false) }) { Icon(IcqIcons.Calls, "Звонок", Modifier.size(22.dp)) }
+                    if (!isGroup && !prefs.blocked && !isSaved && !isBotChat && !isService) {
+                        IconButton(onClick = { call(true) }) { Icon(IcqIcons.Video, "Видеозвонок", Modifier.size(22.dp)) }
+                        IconButton(onClick = { call(false) }) { Icon(IcqIcons.Calls, "Звонок", Modifier.size(19.dp)) }
                     }
                     IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, "Меню") }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -637,6 +629,7 @@ fun ChatScreen(
                                             loadPreview = { url -> vm.linkPreview(url) },
                                             videoSource = { vm.streamSource(m) },
                                             onVote = if (m.kind == MessageKind.POLL) ({ opts -> vm.vote(m, opts) }) else null,
+                                            channelPost = isChannel && !isBot,
                                         )
                                     }
                                 }
@@ -696,6 +689,11 @@ fun ChatScreen(
             Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
                 Column {
                     when {
+                        isService -> Text(
+                            "Служебные уведомления ICQ: коды входа и новые устройства",
+                            fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth().padding(14.dp),
+                        )
                         !isGroup && prefs.blocked -> BottomAction("Разблокировать пользователя") { vm.setBlocked(false) }
                         isChannel && !iAmAdmin -> {
                             BottomAction(if (prefs.muted) "Включить уведомления" else "Отключить уведомления") {
@@ -892,7 +890,7 @@ fun ChatScreen(
                         fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(8.dp))
-                    listOf(0, 3600, 86400, 7 * 86400, 30 * 86400).forEach { sec ->
+                    listOf(0, 3600, 86400, 2 * 86400, 7 * 86400, 30 * 86400).forEach { sec ->
                         Row(
                             Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
                                 .clickable { vm.setTtl(sec); pickTtl = false }.padding(vertical = 10.dp),
@@ -978,6 +976,24 @@ fun ChatScreen(
                 if (need.isEmpty()) openVideoNote() else videoNotePermission.launch(need.toTypedArray())
             },
             onPoll = if (isGroup && canWrite) ({ creatingPoll = true }) else null,
+        )
+    }
+    if (pendingFiles.isNotEmpty()) {
+        SendPreviewSheet(
+            items = pendingFiles,
+            onRemove = { p -> pendingFiles = pendingFiles - p; p.file.delete() },
+            onCancel = { pendingFiles.forEach { it.file.delete() }; pendingFiles = emptyList() },
+            onSend = { caption ->
+                val list = pendingFiles
+                pendingFiles = emptyList()
+                list.forEachIndexed { i, p -> vm.sendFile(p.file, p.name, p.mime, if (i == 0) caption else "") }
+            },
+        )
+    }
+    if (recordingNote) {
+        VideoNoteRecorder(
+            onDismiss = { recordingNote = false },
+            onDone = { f, dur -> recordingNote = false; vm.sendVideoNote(f, dur) },
         )
     }
     if (creatingPoll) {
@@ -1413,6 +1429,7 @@ private fun RecordingBar(levels: List<Float>, onCancel: () -> Unit, onSend: () -
 private fun ttlLabel(sec: Int): String = when (sec) {
     3600 -> "1 час"
     86400 -> "1 день"
+    2 * 86400 -> "2 дня"
     7 * 86400 -> "1 неделя"
     30 * 86400 -> "1 месяц"
     else -> "выкл."

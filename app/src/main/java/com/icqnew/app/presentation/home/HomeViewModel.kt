@@ -128,6 +128,24 @@ class HomeViewModel(
         viewModelScope.launch { settings.setSoundChoice(v); settings.setSound(v != "none") }
     }
 
+    /** Auto-delete for all chats: -1 = not loaded yet. */
+    private val _defaultTtl = MutableStateFlow(-1)
+    val defaultTtl: StateFlow<Int> = _defaultTtl.asStateFlow()
+
+    fun loadDefaultTtl() {
+        viewModelScope.launch { runCatching { chatRepo.defaultTtl() }.onSuccess { _defaultTtl.value = it } }
+    }
+
+    fun setDefaultTtl(sec: Int) {
+        val old = _defaultTtl.value
+        _defaultTtl.value = sec
+        viewModelScope.launch {
+            runCatching { chatRepo.setDefaultTtl(sec) }
+                .onSuccess { _defaultTtl.value = it }
+                .onFailure { _defaultTtl.value = old }
+        }
+    }
+
     fun setSwipeAction(v: String) {
         viewModelScope.launch { settings.setSwipeAction(v) }
     }
@@ -261,7 +279,7 @@ class HomeViewModel(
 
     fun loadMyProfile(uin: Long) {
         viewModelScope.launch {
-            runCatching { chatRepo.fetchUser(uin) }.getOrNull()?.let { _myProfile.value = it }
+            chatRepo.fetchUserFresh(uin)?.let { _myProfile.value = it }
         }
     }
 

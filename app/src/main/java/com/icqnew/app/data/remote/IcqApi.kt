@@ -51,6 +51,10 @@ class IcqApi(private val client: HttpClient, private val store: SessionStore) {
 
     suspend fun setTtl(to: Long?, group: Long?, seconds: Int): TtlDto = post("/api/chats/ttl", TtlRequest(to, group, seconds))
 
+    suspend fun defaultTtl(): TtlDto = get("/api/me/ttl")
+
+    suspend fun setDefaultTtl(seconds: Int): TtlDto = post("/api/me/ttl", DefaultTtlRequest(seconds))
+
     suspend fun preview(url: String): LinkPreviewDto = get("/api/preview", mapOf("url" to url))
 
     suspend fun lookup(phone: String): LookupDto = get("/api/lookup", mapOf("phone" to phone))

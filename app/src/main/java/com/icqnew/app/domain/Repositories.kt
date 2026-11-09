@@ -8,7 +8,8 @@ import java.io.File
 
 interface AuthRepository {
     val session: Flow<Session?>
-    suspend fun requestCode(phone: String)
+    /** true = the code was sent to the «ICQ» chat on the user's other device */
+    suspend fun requestCode(phone: String): Boolean
     suspend fun verify(phone: String, code: String, name: String?): VerifyResult
     suspend fun updateProfile(name: String, about: String)
     suspend fun setUsername(username: String)
@@ -62,6 +63,7 @@ interface ChatRepository {
     suspend fun sendSticker(peer: Long, emoji: String, replyTo: Long? = null)
     suspend fun sendAttachment(
         peer: Long, kind: MessageKind, file: File, name: String, mime: String, durMs: Long, replyTo: Long? = null,
+        caption: String = "",
     )
     suspend fun forward(message: ChatMessage, targets: List<Long>, originalSender: String)
     /** false = no connection right now. */
@@ -151,6 +153,11 @@ interface ChatRepository {
     /** Reports channel posts shown on screen and stores the fresh view counters. */
     suspend fun reportViews(serverIds: List<Long>)
     suspend fun groupLog(peer: Long): List<GroupLogEntry>
+    /** Straight from the server (with birthday, colour and the personal channel). */
+    suspend fun fetchUserFresh(uin: Long): User?
+    /** Auto-delete for all my chats (seconds, 0 = off; 2 days by default). */
+    suspend fun defaultTtl(): Int
+    suspend fun setDefaultTtl(seconds: Int): Int
     /** Latest posts of an open channel (preview before subscribing). */
     suspend fun publicPosts(gid: Long): List<ChatMessage>
     suspend fun groupStats(peer: Long, days: Int): GroupStats

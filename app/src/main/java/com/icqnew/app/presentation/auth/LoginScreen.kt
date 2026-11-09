@@ -132,7 +132,8 @@ fun LoginScreen(onAuthenticated: () -> Unit) {
                 }
                 AuthStep.CODE -> {
                     Text(
-                        "Код для ${s.phone} скоро придёт сообщением от администратора. Обычно это занимает несколько минут.",
+                        if (s.codeInApp) "Мы отправили код в чат «ICQ» на вашем другом устройстве, где вы уже вошли в ICQ New."
+                        else "Код для ${s.phone} скоро придёт сообщением от администратора. Обычно это занимает несколько минут.",
                         fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
                     )

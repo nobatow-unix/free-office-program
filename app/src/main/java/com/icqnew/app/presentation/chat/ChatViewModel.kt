@@ -199,11 +199,11 @@ class ChatViewModel(
         viewModelScope.launch { repo.sendSticker(peerUin, emoji, reply) }
     }
 
-    fun sendFile(file: File, name: String, mime: String) {
+    fun sendFile(file: File, name: String, mime: String, caption: String = "") {
         val kind = if (mime.startsWith("image/") && !mime.contains("gif")) MessageKind.IMAGE else MessageKind.FILE
         val reply = _replyTo.value?.serverId
         _replyTo.value = null
-        viewModelScope.launch { repo.sendAttachment(peerUin, kind, file, name, mime, 0, reply) }
+        viewModelScope.launch { repo.sendAttachment(peerUin, kind, file, name, mime, 0, reply, caption) }
     }
 
     /** Live loudness bars while recording a voice message (newest last). */

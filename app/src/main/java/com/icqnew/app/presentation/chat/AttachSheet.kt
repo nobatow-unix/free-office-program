@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -358,4 +359,85 @@ fun CreatePollDialog(onDismiss: () -> Unit, onCreate: (String, List<String>, Boo
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
     )
+}
+
+/** A photo / file waiting to be sent (shown in the preview sheet with the caption field). */
+data class PendingFile(val file: java.io.File, val name: String, val mime: String)
+
+/**
+ * Before sending: previews of the chosen photos / files, "Добавить подпись…" field and the send button.
+ * The caption goes with the first item (like an album caption in Telegram).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SendPreviewSheet(
+    items: List<PendingFile>,
+    onRemove: (PendingFile) -> Unit,
+    onCancel: () -> Unit,
+    onSend: (String) -> Unit,
+) {
+    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var caption by remember { mutableStateOf("") }
+    ModalBottomSheet(onDismissRequest = onCancel, sheetState = sheet) {
+        Column(Modifier.fillMaxWidth().imePadding().padding(bottom = 10.dp)) {
+            Text(
+                when {
+                    items.all { it.mime.startsWith("image/") } -> if (items.size == 1) "Фото" else "Фото: ${items.size}"
+                    items.size == 1 -> "Файл"
+                    else -> "Файлы: ${items.size}"
+                },
+                fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.padding(horizontal = 16.dp),
+            )
+            Spacer(Modifier.height(10.dp))
+            androidx.compose.foundation.lazy.LazyRow(
+                contentPadding = PaddingValues(horizontal = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(items.size) { i ->
+                    val p = items[i]
+                    Box(
+                        Modifier.size(if (items.size == 1 && p.mime.startsWith("image/")) 220.dp else 110.dp)
+                            .clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
+                    ) {
+                        if (p.mime.startsWith("image/")) {
+                            AsyncImage(model = p.file, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                        } else {
+                            Column(
+                                Modifier.fillMaxSize().padding(8.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center,
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.InsertDriveFile, null, tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(34.dp))
+                                Spacer(Modifier.height(4.dp))
+                                Text(p.name, fontSize = 11.sp, maxLines = 2, color = MaterialTheme.colorScheme.onSurface)
+                                Text(com.icqnew.app.data.local.FileUtils.humanSize(p.file.length()), fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        Box(
+                            Modifier.align(Alignment.TopEnd).padding(5.dp).size(22.dp).clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.55f)).clickable { onRemove(p) },
+                            contentAlignment = Alignment.Center,
+                        ) { Icon(Icons.Filled.Close, "Убрать", tint = Color.White, modifier = Modifier.size(14.dp)) }
+                    }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    caption, { caption = it.take(4000) },
+                    placeholder = { Text("Добавить подпись…") },
+                    maxLines = 5, shape = RoundedCornerShape(22.dp),
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                Box(
+                    Modifier.size(48.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary)
+                        .clickable(enabled = items.isNotEmpty()) { onSend(caption) },
+                    contentAlignment = Alignment.Center,
+                ) { Icon(Icons.AutoMirrored.Filled.Send, "Отправить", tint = Color.White) }
+            }
+        }
+    }
 }

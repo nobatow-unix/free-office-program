@@ -83,7 +83,7 @@ data class SessionDto(
 )
 
 @Serializable
-data class OkResponse(val ok: Boolean = true, @SerialName("retry_in") val retryIn: Int = 30)
+data class OkResponse(val ok: Boolean = true, @SerialName("retry_in") val retryIn: Int = 30, @SerialName("in_app") val inApp: Boolean = false)
 
 @Serializable
 data class CodeRequest(val phone: String)
@@ -155,7 +155,10 @@ data class LookupDto(val found: Boolean = false, val user: UserDto? = null)
 data class QrApproveRequest(val code: String)
 
 @Serializable
-data class AppVersionDto(val code: Long = 0, val name: String = "", val notes: String = "", val url: String = "/download", val size: Long = 0)
+data class DefaultTtlRequest(val seconds: Int)
+
+@Serializable
+data class AppVersionDto(val code: Long = 0, val name: String = "", val notes: String = "", val url: String = "/download", val size: Long = 0, val sha256: String = "")
 
 @Serializable
 data class ResolveGroupDto(val id: Long)

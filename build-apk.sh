@@ -62,9 +62,9 @@ fi
 echo "==> 4/4 APK ýasalýar (birinji gezek 10-15 min)"
 echo "sdk.dir=$SDK" > local.properties
 export ANDROID_HOME="$SDK"
-"$GRADLE_HOME_DIR/bin/gradle" :app:assembleDebug --no-daemon
+"$GRADLE_HOME_DIR/bin/gradle" :app:assembleRelease --no-daemon
 
-APK="app/build/outputs/apk/debug/app-debug.apk"
+APK="app/build/outputs/apk/release/app-release.apk"
 OUT_DIR="$HOME/Загрузки"
 [ -d "$OUT_DIR" ] || OUT_DIR="$HOME"
 cp "$APK" "$OUT_DIR/icq-new.apk"

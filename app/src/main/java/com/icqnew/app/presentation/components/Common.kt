@@ -27,6 +27,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
@@ -107,6 +113,14 @@ fun Avatar(
                 Modifier.size(size).clip(CircleShape).background(MaterialTheme.colorScheme.primary),
                 contentAlignment = Alignment.Center,
             ) { Icon(Icons.Filled.Bookmark, null, tint = Color.White, modifier = Modifier.size(size * 0.5f)) }
+        } else if (uin == com.icqnew.app.domain.SERVICE_UIN && url.isNullOrBlank()) {
+            // the ICQ flower on a dark circle
+            Box(
+                Modifier.size(size).clip(CircleShape).background(Color(0xFF111418)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Image(painterResource(R.drawable.ic_logo), null, Modifier.size(size * 0.72f))
+            }
         } else if ((isBot || uin == com.icqnew.app.domain.BOT_UIN) && url.isNullOrBlank()) {
             BotLogo(size)
         } else if (!url.isNullOrBlank()) {
@@ -215,6 +229,7 @@ private fun hoursWord(n: Long): String {
  */
 fun formatPresence(online: Boolean, lastSeen: Long, uin: Long = 0): String {
     if (uin == com.icqnew.app.domain.BOT_UIN) return "бот"
+    if (uin == com.icqnew.app.domain.SERVICE_UIN) return "служебные уведомления"
     if (online) return "в сети"
     if (lastSeen <= 0) return "был(а) недавно"
     val diff = System.currentTimeMillis() - lastSeen
@@ -401,4 +416,41 @@ fun Modifier.usernameCopy(username: String, link: String): Modifier = composed {
             put(link, "Ссылка скопирована")
         },
     )
+}
+
+/** Unread counter: a neat pill with perfectly centred digits; grey when the chat is muted; pops on change. */
+@Composable
+fun CountBadge(count: Int, muted: Boolean = false, modifier: Modifier = Modifier, small: Boolean = false) {
+    val primary = MaterialTheme.colorScheme.primary
+    val base = if (muted) Color(0xFF8A939E) else primary
+    val h = if (small) 17.dp else 20.dp
+    var pop by remember { mutableStateOf(false) }
+    LaunchedEffect(count) { pop = true; kotlinx.coroutines.delay(140); pop = false }
+    val scale by androidx.compose.animation.core.animateFloatAsState(
+        if (pop) 1.18f else 1f, androidx.compose.animation.core.spring(dampingRatio = 0.45f), label = "badge",
+    )
+    Box(
+        modifier
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .height(h)
+            .defaultMinSize(minWidth = h)
+            .clip(RoundedCornerShape(50))
+            .background(androidx.compose.ui.graphics.Brush.verticalGradient(listOf(androidx.compose.ui.graphics.lerp(base, Color.White, 0.14f), base)))
+            .padding(horizontal = if (count > 9) 6.dp else 0.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            if (count > 999) "999+" else count.toString(),
+            color = Color.White,
+            style = androidx.compose.ui.text.TextStyle(
+                fontSize = if (small) 10.5.sp else 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false),
+                lineHeightStyle = androidx.compose.ui.text.style.LineHeightStyle(
+                    androidx.compose.ui.text.style.LineHeightStyle.Alignment.Center,
+                    androidx.compose.ui.text.style.LineHeightStyle.Trim.Both,
+                ),
+            ),
+        )
+    }
 }

@@ -25,14 +25,14 @@ jobs:
             wget -q https://services.gradle.org/distributions/gradle-8.9-bin.zip -O /tmp/g.zip
             unzip -q /tmp/g.zip -d /tmp
             echo "sdk.dir=$ANDROID_HOME" > local.properties
-            /tmp/gradle-8.9/bin/gradle :app:assembleDebug --no-daemon --stacktrace
+            /tmp/gradle-8.9/bin/gradle :app:assembleRelease --no-daemon --stacktrace
           } 2>&1 | tee /tmp/build.log
       - name: Publish result to branch icq-new-apk
         if: always()
         run: |
           mkdir -p /tmp/out && cd /tmp/out
-          if [ -f "$GITHUB_WORKSPACE/app/build/outputs/apk/debug/app-debug.apk" ]; then
-            cp "$GITHUB_WORKSPACE/app/build/outputs/apk/debug/app-debug.apk" icq-new.apk
+          if [ -f "$GITHUB_WORKSPACE/app/build/outputs/apk/release/app-release.apk" ]; then
+            cp "$GITHUB_WORKSPACE/app/build/outputs/apk/release/app-release.apk" icq-new.apk
             echo ok > STATUS
           else
             echo failed > STATUS

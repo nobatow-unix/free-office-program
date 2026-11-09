@@ -176,6 +176,9 @@ data class GroupSettings(
 
 const val BOT_UIN = 10_000_000L
 
+/** «ICQ» service account: login codes and new-device alerts (read-only chat). */
+const val SERVICE_UIN = 777_000L
+
 data class Story(
     val id: Long,
     val uin: Long,

@@ -227,7 +227,6 @@ fun ProfileScreen(uin: Long, onBack: () -> Unit, onOpenChat: () -> Unit, onOpenC
             }
             Spacer(Modifier.height(12.dp))
             com.icqnew.app.presentation.components.NameLine(user?.name ?: "ID $uin", verified = user?.verified == true, fontSize = 24.sp, bot = uin == com.icqnew.app.domain.BOT_UIN)
-            user?.username?.let { Text("@$it", color = MaterialTheme.colorScheme.primary, fontSize = 15.sp) }
             Text(
                 if (prefs.blocked) "заблокирован" else user?.let { formatPresence(it.online, it.lastSeen, it.uin) } ?: "",
                 color = if (user?.online == true) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
