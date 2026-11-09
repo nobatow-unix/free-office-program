@@ -62,6 +62,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -301,7 +302,7 @@ private fun ViewsChart(s: GroupStats, modifier: Modifier) {
                 lineTo(p(pts.size - 1).x, size.height); lineTo(0f, size.height); close()
             }
             val w = size.width * draw.value
-            androidx.compose.ui.graphics.drawscope.clipRect(right = w) {
+            clipRect(right = w) {
                 drawPath(area, Brush.verticalGradient(listOf(line.copy(alpha = 0.35f), Color.Transparent)))
                 drawPath(path, line, style = Stroke(2.5.dp.toPx(), cap = StrokeCap.Round))
             }
