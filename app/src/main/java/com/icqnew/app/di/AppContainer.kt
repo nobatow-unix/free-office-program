@@ -57,7 +57,9 @@ class AppContainer(private val context: Context) {
         install(WebSockets)
         engine {
             config {
-                connectTimeout(15, TimeUnit.SECONDS)
+                // several servers behind one domain: a dead one is skipped quickly, OkHttp tries the next IP
+                connectTimeout(6, TimeUnit.SECONDS)
+                retryOnConnectionFailure(true)
                 readTimeout(60, TimeUnit.SECONDS)
                 writeTimeout(120, TimeUnit.SECONDS)
                 pingInterval(20, TimeUnit.SECONDS)

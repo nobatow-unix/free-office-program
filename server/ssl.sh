@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 # ICQ New: HTTPS sertifikatlary (Let's Encrypt) + näme üçin alynmaýandygyny görkezmek.
 #   bash ssl.sh icq-new.online icq-new.ru
+FORCE=""
+[ "${1:-}" = "--force" ] && { FORCE="--force-renewal"; shift; }
 [ $# -eq 0 ] && set -- "${ICQ_DOMAIN:-icq-new.online}" "${ICQ_SITE_DOMAIN:-icq-new.ru}"
+# klaster: domen birnäçe serwere görkezýär — Let's Encrypt barlagy islendik serwere gelip biler,
+# şonuň üçin jogap Redis-de saklanýar (acme-hook.sh) we her serwer ony görkezýär
+CLUSTER=""
+grep -q '^ICQ_REDIS_URL=' /opt/icq-server/icq.env 2>/dev/null && CLUSTER=1
 PUBIP="$(curl -4 -fsS -m 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')"
 echo "==> HTTPS  (serweriň IP-si: $PUBIP)"
 command -v certbot >/dev/null || apt-get install -y certbot python3-certbot-nginx >/dev/null
@@ -25,7 +31,11 @@ for DOMAIN in "$@"; do
     echo "   ❌ A ýazgy ýok. Domen panelinde goş:  A  @  $PUBIP   (we  A  www  $PUBIP)"
     RC=1; continue
   fi
-  [ "$A" != "$PUBIP" ] && echo "   ⚠ A ýazgy başga IP görkezýär ($A). Cloudflare 'proxy' bolsa kadaly, ýogsam $PUBIP goý."
+  if [ -z "$CLUSTER" ]; then
+    [ "$A" != "$PUBIP" ] && echo "   ⚠ A ýazgy başga IP görkezýär ($A). Cloudflare 'proxy' bolsa kadaly, ýogsam $PUBIP goý."
+  else
+    echo "   klaster: DNS-däki serwerler: $(getent ahostsv4 "$DOMAIN" | awk '{print $1}' | sort -u | tr '\n' ' ')"
+  fi
   if curl -fsS -m 8 -o /dev/null "http://$DOMAIN/api/ping"; then
     echo "   http://$DOMAIN açylýar ✔"
   else
@@ -33,9 +43,15 @@ for DOMAIN in "$@"; do
   fi
   DOMS="-d $DOMAIN"
   W="$(getent ahostsv4 "www.$DOMAIN" | awk 'NR==1{print $1}')"
-  [ -n "$W" ] && [ "$W" = "$A" ] && DOMS="$DOMS -d www.$DOMAIN"
-  if certbot --nginx $DOMS --cert-name "$DOMAIN" --non-interactive --agree-tos --register-unsafely-without-email \
-       --no-redirect --keep-until-expiring; then
+  [ -n "$W" ] && { [ -n "$CLUSTER" ] || [ "$W" = "$A" ]; } && DOMS="$DOMS -d www.$DOMAIN"
+  if [ -n "$CLUSTER" ]; then
+    AUTH=(-a manual -i nginx --preferred-challenges http
+          --manual-auth-hook /opt/icq-server/acme-hook.sh --manual-cleanup-hook /opt/icq-server/acme-clean.sh)
+  else
+    AUTH=(--nginx)
+  fi
+  if certbot "${AUTH[@]}" $DOMS --cert-name "$DOMAIN" --non-interactive --agree-tos --register-unsafely-without-email \
+       --no-redirect --keep-until-expiring $FORCE; then
     echo "   ✔ https://$DOMAIN taýýar"
   else
     echo "   ❌ $DOMAIN üçin sertifikat alynmady — ýokardaky 'Detail:' setirini iber."

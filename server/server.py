@@ -28,12 +28,16 @@ import html
 import re
 import secrets
 import sqlite3
+
+import db as icqdb
+from cluster import CLUSTER
+import cluster as icqcluster
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
@@ -109,7 +113,83 @@ _rev_lock = threading.Lock()
 os.makedirs(AVATAR_DIR, exist_ok=True)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 app = FastAPI(title="ICQ New server")
-app.mount("/avatars", StaticFiles(directory=AVATAR_DIR), name="avatars")
+BLOB_DIRS = {"uploads": UPLOAD_DIR, "avatars": AVATAR_DIR}
+
+
+def local_blob(kind: str, name: str) -> Optional[str]:
+    """Path of a file on this server; in a cluster a missing copy is taken from another server first."""
+    if not icqcluster.NAME_RE.match(name or "") or kind not in BLOB_DIRS:
+        return None
+    p = os.path.join(BLOB_DIRS[kind], name)
+    if os.path.exists(p):
+        return p
+    if icqcluster.ENABLED and CLUSTER.fetch_file(kind, name, p):
+        return p
+    return None
+
+
+@app.get("/.well-known/acme-challenge/{token}")
+def acme_challenge(token: str):
+    """Let's Encrypt in a cluster: the check may come to any server, the answer is kept in Redis (acme-hook.sh)."""
+    if not icqcluster.ENABLED or CLUSTER.rs is None or not re.fullmatch(r"[A-Za-z0-9_\-]{10,200}", token):
+        raise HTTPException(404, "Not Found")
+    v = CLUSTER.rs.get(f"icq:acme:{token}")
+    if not v:
+        raise HTTPException(404, "Not Found")
+    return Response(v, media_type="text/plain")
+
+
+@app.get("/avatars/{name}")
+async def avatar_file(name: str):
+    p = await asyncio.to_thread(local_blob, "avatars", name)
+    if not p:
+        raise HTTPException(404, "Not Found")
+    return FileResponse(p, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+
+
+def _cluster_auth(request: Request) -> None:
+    if not icqcluster.ENABLED or not icqcluster.SECRET or not secrets.compare_digest(
+            request.headers.get("x-icq-cluster", ""), icqcluster.SECRET):
+        raise HTTPException(403, "Forbidden")
+
+
+@app.get("/internal/blob")
+def internal_blob_get(kind: str, name: str, request: Request):
+    """Another server of the cluster asks for a file (only this server's own copy, no further fetching)."""
+    _cluster_auth(request)
+    if kind not in BLOB_DIRS or not icqcluster.NAME_RE.match(name):
+        raise HTTPException(400, "bad name")
+    p = os.path.join(BLOB_DIRS[kind], name)
+    if not os.path.exists(p):
+        raise HTTPException(404, "Not Found")
+    return FileResponse(p, media_type="application/octet-stream")
+
+
+@app.put("/internal/blob")
+async def internal_blob_put(kind: str, name: str, request: Request) -> dict:
+    """Another server copies a new file here."""
+    _cluster_auth(request)
+    if kind not in BLOB_DIRS or not icqcluster.NAME_RE.match(name):
+        raise HTTPException(400, "bad name")
+    p = os.path.join(BLOB_DIRS[kind], name)
+    tmp = p + ".part"
+    with open(tmp, "wb") as f:
+        async for chunk in request.stream():
+            f.write(chunk)
+    os.replace(tmp, p)
+    return {"ok": True}
+
+
+@app.delete("/internal/blob")
+def internal_blob_delete(kind: str, name: str, request: Request) -> dict:
+    _cluster_auth(request)
+    if kind in BLOB_DIRS and icqcluster.NAME_RE.match(name):
+        try:
+            os.remove(os.path.join(BLOB_DIRS[kind], name))
+        except OSError:
+            pass
+    return {"ok": True}
+
 
 
 def _admin_password() -> str:
@@ -131,20 +211,18 @@ ADMIN_PASSWORD = _admin_password()
 
 # --------------------------------------------------------------------------- DB
 def conn() -> sqlite3.Connection:
-    c = sqlite3.connect(DB_PATH, timeout=15)
-    c.row_factory = sqlite3.Row
-    return c
+    """SQLite file (one server) or the shared PostgreSQL of the cluster (ICQ_DB_URL) — see db.py."""
+    return icqdb.connect(DB_PATH)
 
 
 def _add_column(c: sqlite3.Connection, table: str, ddl: str) -> None:
-    name = ddl.split()[0]
-    cols = {r["name"] for r in c.execute(f"PRAGMA table_info({table})").fetchall()}
-    if name not in cols:
-        c.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+    icqdb.add_column(c, table, ddl)
 
 
 def init_db() -> None:
+    icqdb.prepare()
     with conn() as c:
+        icqdb.advisory_lock(c, 4242)  # two servers starting together do not change the schema at once
         c.executescript(
             """
             PRAGMA journal_mode=WAL;
@@ -399,6 +477,7 @@ def init_db() -> None:
         c.execute("CREATE INDEX IF NOT EXISTS idx_msg_group ON messages(group_id, id)")
         _add_column(c, "stories", "repost_of INTEGER")
         _add_column(c, "stories", "repost_uin INTEGER")
+        _add_column(c, "qr_logins", "device TEXT")
         c.execute("UPDATE messages SET rev=id WHERE rev=0")
         c.execute(
             "INSERT OR IGNORE INTO meta(k, v) VALUES('rev', (SELECT COALESCE(MAX(rev), 0) FROM messages))"
@@ -450,6 +529,7 @@ class Manager:
         lst = self.conns.setdefault(uin, [])
         first = not lst
         lst.append(ws)
+        self.changed(uin)
         return first
 
     def remove(self, uin: int, ws: WebSocket) -> bool:
@@ -457,20 +537,41 @@ class Manager:
         self.idle.discard(id(ws))
         if ws in lst:
             lst.remove(ws)
-        if not lst:
+        last = not lst
+        if last:
             self.conns.pop(uin, None)
-            return True
-        return False
+        self.changed(uin)
+        return last
+
+    def set_idle(self, uin: int, ws: WebSocket, idle: bool) -> None:
+        if idle:
+            self.idle.add(id(ws))
+        else:
+            self.idle.discard(id(ws))
+        self.changed(uin)
+
+    def _local(self, uin: int) -> Tuple[int, int]:
+        lst = self.conns.get(uin, [])
+        return sum(1 for ws in lst if id(ws) not in self.idle), len(lst)
+
+    def changed(self, uin: int) -> None:
+        """Tells the other servers of the cluster how [uin] is connected to this one."""
+        a, t = self._local(uin)
+        CLUSTER.presence(uin, a, t)
 
     def connected(self, uin: int) -> bool:
-        return uin in self.conns
+        return uin in self.conns or CLUSTER.remote_counts(uin)[1] > 0
 
     def online(self, uin: int) -> bool:
-        """'Online' = the app is open on at least one device (not just a background connection)."""
-        return any(id(ws) not in self.idle for ws in self.conns.get(uin, []))
+        """'Online' = the app is open on at least one device (not just a background connection), on any server."""
+        return any(id(ws) not in self.idle for ws in self.conns.get(uin, [])) or CLUSTER.remote_counts(uin)[0] > 0
 
-    async def send(self, uin: int, payload: dict, skip: Optional[WebSocket] = None) -> None:
-        text = json.dumps(payload, ensure_ascii=False)
+    def online_count(self) -> int:
+        return len(set(self.conns) | CLUSTER.remote_uins())
+
+    async def deliver(self, uin: int, payload, skip: Optional[WebSocket] = None) -> None:
+        """Only to this server's connections."""
+        text = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
         for ws in list(self.conns.get(uin, [])):
             if ws is skip:
                 continue
@@ -479,16 +580,41 @@ class Manager:
             except Exception:
                 self.remove(uin, ws)
 
-    async def send_many(self, uins, payload: dict, skip: Optional[WebSocket] = None) -> None:
-        for u in set(uins):
-            await self.send(u, payload, skip)
+    async def send(self, uin: int, payload: dict, skip: Optional[WebSocket] = None) -> None:
+        await self.deliver(uin, payload, skip)
+        if CLUSTER.remote_counts(uin)[1] > 0:
+            CLUSTER.publish({"t": "send", "u": [uin], "p": payload})
 
-    async def kick(self, uin: int) -> None:
+    async def send_many(self, uins, payload: dict, skip: Optional[WebSocket] = None) -> None:
+        uins = set(uins)
+        text = json.dumps(payload, ensure_ascii=False)
+        for u in uins:
+            await self.deliver(u, text, skip)
+        far = [u for u in uins if CLUSTER.remote_counts(u)[1] > 0]
+        if far:
+            CLUSTER.publish({"t": "send", "u": far, "p": payload})
+
+    async def kick(self, uin: int, everywhere: bool = True) -> None:
         for ws in list(self.conns.get(uin, [])):
             try:
                 await ws.close(code=4403)
             except Exception:
                 pass
+        if everywhere:
+            CLUSTER.publish({"t": "kick", "u": uin})
+
+    async def kick_tokens(self, uin: int, tokens: List[str], everywhere: bool = True) -> None:
+        for w in list(self.conns.get(uin, [])):
+            if self.ws_tokens.get(id(w)) in tokens:
+                try:
+                    await w.close(code=4401)
+                except Exception:
+                    pass
+        if everywhere:
+            CLUSTER.publish({"t": "kicktok", "u": uin, "tokens": tokens})
+
+    def token_online(self, uin: int, token: str) -> bool:
+        return any(self.ws_tokens.get(id(w)) == token for w in self.conns.get(uin, [])) or CLUSTER.token_online(token)
 
 
 manager = Manager()
@@ -599,7 +725,8 @@ def me_json(row: sqlite3.Row, c: Optional[sqlite3.Connection] = None) -> dict:
 
 
 def reactions_of(c: sqlite3.Connection, msg_id: int) -> list:
-    rows = c.execute("SELECT uin, emoji FROM reactions WHERE msg_id=? ORDER BY rowid", (msg_id,)).fetchall()
+    rows = c.execute("SELECT uin, emoji FROM reactions WHERE msg_id=? ORDER BY "
+                     + ("ctid" if icqdb.IS_PG else "rowid"), (msg_id,)).fetchall()
     return [{"uin": r["uin"], "emoji": r["emoji"]} for r in rows]
 
 
@@ -949,12 +1076,13 @@ def drop_push_token(token: str = Query(""), authorization: Optional[str] = Heade
 
 @app.get("/api/ping")
 def ping() -> dict:
-    return {"service": "ICQ New server", "version": 5, "online": len(manager.conns)}
+    return {"service": "ICQ New server", "version": 5, "online": manager.online_count()}
 
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 APK_PATH = os.environ.get("ICQ_APK", os.path.join(os.path.dirname(os.path.abspath(__file__)), "apk", "icq-new.apk"))
 from apkdelta import Deltas  # noqa: E402  (delta updates: apk/history + apk/patches)
+import apkdelta  # noqa: E402
 DELTAS = Deltas(APK_PATH)
 
 
@@ -1455,6 +1583,7 @@ async def upload_avatar(request: Request, authorization: Optional[str] = Header(
     _check_jpeg(data)
     with open(os.path.join(AVATAR_DIR, f"{uin}.jpg"), "wb") as f:
         f.write(data)
+    CLUSTER.push_file("avatars", f"{uin}.jpg", os.path.join(AVATAR_DIR, f"{uin}.jpg"))
     url = f"/avatars/{uin}.jpg?v={now_ms()}"
     with conn() as c:
         c.execute("UPDATE users SET avatar_url=? WHERE uin=?", (url, uin))
@@ -1684,7 +1813,7 @@ def sessions(authorization: Optional[str] = Header(None)) -> list:
             "created": r["created"],
             "last_used": r["last_used"] or r["created"],
             "current": r["token"] == mine,
-            "online": any(manager.ws_tokens.get(id(w)) == r["token"] for w in manager.conns.get(uin, [])),
+            "online": manager.token_online(uin, r["token"]),
         }
         for r in rows
     ]
@@ -1699,12 +1828,7 @@ async def end_session(sid: str, authorization: Optional[str] = Header(None)) -> 
         victims = [r["token"] for r in rows if (sid == "others" and r["token"] != mine) or session_id(r["token"]) == sid]
         for t in victims:
             c.execute("DELETE FROM tokens WHERE token=?", (t,))
-    for w in list(manager.conns.get(uin, [])):
-        if manager.ws_tokens.get(id(w)) in victims:
-            try:
-                await w.close(code=4401)
-            except Exception:
-                pass
+    await manager.kick_tokens(uin, victims)
     return {"ok": True, "ended": len(victims)}
 
 
@@ -1731,7 +1855,7 @@ def contacts(authorization: Optional[str] = Header(None)) -> list:
     with conn() as c:
         rows = c.execute(
             "SELECT u.* FROM contacts k JOIN users u ON u.uin=k.contact WHERE k.owner=? AND k.created>0"
-            " ORDER BY COALESCE(k.alias, u.name) COLLATE NOCASE",
+            " ORDER BY lower(COALESCE(k.alias, u.name))",
             (uin,),
         ).fetchall()
         return [contact_json(c, uin, r) for r in rows]
@@ -1978,6 +2102,9 @@ async def wipe_user(uin: int) -> None:
         os.remove(os.path.join(AVATAR_DIR, f"{uin}.jpg"))
     except OSError:
         pass
+    CLUSTER.delete_file("avatars", f"{uin}.jpg")
+    for p in paths:
+        CLUSTER.delete_file("uploads", os.path.basename(p))
     await manager.kick(uin)
     for gid in gids:
         await leave_group(gid, uin, actor=uin, system_text="покинул(а) группу", deleted_user=True)
@@ -2037,6 +2164,7 @@ async def upload(
             "INSERT INTO files(id, owner, name, mime, size, dur, path, created) VALUES(?,?,?,?,?,?,?,?)",
             (fid, uin, safe_name(name), mime[:100], size, max(dur, 0), path, now_ms()),
         )
+    CLUSTER.push_file("uploads", fid, path)  # a copy on every server of the cluster
     return {"id": fid, "name": safe_name(name), "size": size, "mime": mime[:100], "dur": max(dur, 0)}
 
 
@@ -2065,7 +2193,10 @@ def download(fid: str, t: Optional[str] = None, authorization: Optional[str] = H
         f = can_access_file(c, uin, fid)
     if not f:
         raise HTTPException(404, "Файл не найден")
-    return FileResponse(f["path"], media_type=f["mime"], filename=f["name"])
+    p = local_blob("uploads", os.path.basename(f["path"])) or f["path"]
+    if not os.path.exists(p):
+        raise HTTPException(404, "Файл не найден")
+    return FileResponse(p, media_type=f["mime"], filename=f["name"])
 
 
 # ----------------------------------------------------------------------- groups
@@ -2620,6 +2751,7 @@ async def group_avatar(gid: int, request: Request, authorization: Optional[str] 
         g = require_group_admin(c, gid, uin)
         with open(os.path.join(AVATAR_DIR, f"g{gid}.jpg"), "wb") as f:
             f.write(data)
+        CLUSTER.push_file("avatars", f"g{gid}.jpg", os.path.join(AVATAR_DIR, f"g{gid}.jpg"))
         c.execute("UPDATE groups SET avatar_url=? WHERE id=?", (f"/avatars/g{gid}.jpg?v={now_ms()}", gid))
         sys_row = insert_system(c, gid, uin, f"{uname(c, uin)} изменил(а) фото")
         result = group_json(c, c.execute("SELECT * FROM groups WHERE id=?", (gid,)).fetchone())
@@ -2761,6 +2893,7 @@ async def group_bot_avatar(gid: int, request: Request, authorization: Optional[s
         require_group_admin(c, gid, uin)
         with open(os.path.join(AVATAR_DIR, f"b{gid}.jpg"), "wb") as f:
             f.write(data)
+        CLUSTER.push_file("avatars", f"b{gid}.jpg", os.path.join(AVATAR_DIR, f"b{gid}.jpg"))
         c.execute("UPDATE groups SET bot_avatar=? WHERE id=?", (f"/avatars/b{gid}.jpg?v={now_ms()}", gid))
         result = group_json(c, c.execute("SELECT * FROM groups WHERE id=?", (gid,)).fetchone())
     await push_group(gid)
@@ -2949,6 +3082,8 @@ def purge_old() -> int:
 async def expire_loop() -> None:
     while True:
         await asyncio.sleep(30)
+        if not CLUSTER.leader:
+            continue
         try:
             await expire_messages()
         except Exception as e:  # noqa: BLE001
@@ -3079,7 +3214,7 @@ def qr_new(device: str = Query("")) -> dict:
     with conn() as c:
         c.execute("INSERT INTO qr_logins(code, created) VALUES(?,?)", (code, now_ms()))
         if device:
-            _qr_devices[code] = device[:60]
+            c.execute("UPDATE qr_logins SET device=? WHERE code=?", (device[:60], code))
     return {"code": code, "qr": "icqnew-login:" + code}
 
 
@@ -3127,7 +3262,8 @@ async def qr_approve(body: QrApproveIn, request: Request, authorization: Optiona
         if not r or now_ms() - r["created"] > 300_000 or r["token"]:
             raise HTTPException(404, "QR-код устарел, обновите страницу")
         token = secrets.token_hex(32)
-        phone_dev = _qr_devices.pop(code, "")
+        qrow = c.execute("SELECT device FROM qr_logins WHERE code=?", (code,)).fetchone()
+        phone_dev = (qrow["device"] if qrow else "") or ""
         agent = (request.headers.get("x-web-agent") or "Web")[:60]
         label = phone_dev if phone_dev else "Web · " + agent
         c.execute(
@@ -3186,21 +3322,139 @@ def cleanup_storage() -> dict:
     return {"files": removed, "freed": freed}
 
 
+def sweep_local_files() -> int:
+    """Cluster: copies of files that no longer exist in the database are removed from this server's disk."""
+    removed = 0
+    cutoff = time.time() - 2 * 86400
+    try:
+        names = [n for n in os.listdir(UPLOAD_DIR) if not n.endswith(".part")]
+    except OSError:
+        return 0
+    with conn() as c:
+        for i in range(0, len(names), 500):
+            part = names[i:i + 500]
+            known = {r["id"] for r in c.execute(
+                "SELECT id FROM files WHERE id IN (" + ",".join("?" * len(part)) + ")", part).fetchall()}
+            for n in part:
+                p = os.path.join(UPLOAD_DIR, n)
+                try:
+                    if n not in known and os.path.getmtime(p) < cutoff:
+                        os.remove(p)
+                        removed += 1
+                except OSError:
+                    pass
+    return removed
+
+
 async def cleanup_loop() -> None:
     while True:
         await asyncio.sleep(6 * 3600)
         try:
-            await asyncio.to_thread(purge_old)
-            await asyncio.to_thread(cleanup_storage)
+            if CLUSTER.leader:  # once for the whole cluster
+                await asyncio.to_thread(purge_old)
+                await asyncio.to_thread(cleanup_storage)
+            if icqcluster.ENABLED:
+                await asyncio.to_thread(sweep_local_files)
         except Exception as e:  # noqa: BLE001
             print("cleanup failed:", e)
+
+
+async def _cluster_send(uins: List[int], payload: dict) -> None:
+    text = json.dumps(payload, ensure_ascii=False)
+    for u in uins:
+        await manager.deliver(u, text)
+
+
+async def _cluster_node_lost(uins: List[int]) -> None:
+    # users that were connected only through a server that went down are offline now
+    if not CLUSTER.leader:
+        return
+    for u in uins:
+        if not manager.online(u):
+            try:
+                await broadcast_presence(u, False)
+            except Exception:  # noqa: BLE001
+                pass
 
 
 @app.on_event("startup")
 async def _start_cleanup() -> None:
     DELTAS.start()  # archive the served APK, build patches from older versions in the background
+    CLUSTER.on_send = _cluster_send
+    CLUSTER.on_kick = lambda u: manager.kick(u, everywhere=False)
+    CLUSTER.on_kick_tokens = lambda u, t: manager.kick_tokens(u, t, everywhere=False)
+    CLUSTER.on_node_lost = _cluster_node_lost
+    await CLUSTER.start()
+    if icqcluster.ENABLED:
+        asyncio.create_task(apk_sync_loop())
     asyncio.create_task(cleanup_loop())
     asyncio.create_task(expire_loop())
+
+
+@app.get("/internal/apkinfo")
+def internal_apkinfo(request: Request) -> dict:
+    _cluster_auth(request)
+    return {"code": DELTAS.current_code(), "sha": DELTAS.sha()}
+
+
+@app.get("/internal/apkfile")
+def internal_apkfile(f: str, request: Request):
+    _cluster_auth(request)
+    p = APK_PATH if f == "apk" else os.path.join(os.path.dirname(APK_PATH), "version.json") if f == "json" else ""
+    if not p or not os.path.exists(p):
+        raise HTTPException(404, "Not Found")
+    return FileResponse(p, media_type="application/octet-stream")
+
+
+def sync_apk_from_peers() -> bool:
+    """Cluster: the new APK is put on ONE server (install.sh) — the others take it from there by themselves."""
+    import urllib.request
+    mine = DELTAS.current_code()
+    hdr = {"X-ICQ-Cluster": icqcluster.SECRET}
+    for url in CLUSTER.peers():
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url + "/internal/apkinfo", headers=hdr), timeout=10) as r:
+                info = json.loads(r.read())
+            if int(info.get("code") or 0) <= mine:
+                continue
+            base = os.path.dirname(APK_PATH)
+            os.makedirs(base, exist_ok=True)
+            tmp_apk, tmp_json = APK_PATH + ".sync", os.path.join(base, "version.json.sync")
+            for f, dst in (("apk", tmp_apk), ("json", tmp_json)):
+                req = urllib.request.Request(f"{url}/internal/apkfile?f={f}", headers=hdr)
+                with urllib.request.urlopen(req, timeout=600) as r, open(dst, "wb") as out:
+                    while True:
+                        chunk = r.read(1 << 20)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+            if apkdelta.sha256_of(tmp_apk) != info.get("sha"):
+                os.remove(tmp_apk)
+                continue
+            DELTAS.archive_current()  # the old one stays for small patches
+            os.replace(tmp_apk, APK_PATH)
+            os.replace(tmp_json, os.path.join(base, "version.json"))
+            print(f"[cluster] APK {mine} -> {info.get('code')} taken from {url}", flush=True)
+            DELTAS.start()
+            return True
+        except Exception as e:  # noqa: BLE001
+            print(f"[cluster] apk sync from {url}: {e}", flush=True)
+    return False
+
+
+async def apk_sync_loop() -> None:
+    await asyncio.sleep(20)
+    while True:
+        try:
+            await asyncio.to_thread(sync_apk_from_peers)
+        except Exception as e:  # noqa: BLE001
+            print("[cluster] apk sync:", e, flush=True)
+        await asyncio.sleep(120)
+
+
+@app.on_event("shutdown")
+async def _stop_cluster() -> None:
+    await CLUSTER.stop()
 
 
 # ------------------------------------------------------------------ moderation
@@ -3416,10 +3670,15 @@ async def handle_call(sender: int, data: dict) -> None:
         await manager.send(to, msg)
     else:
         if kind in ("offer", "ice"):
-            q = pending_calls.setdefault(to, [])
-            q.append((now_ms(), msg))
+            if icqcluster.ENABLED:
+                await CLUSTER.push_pending(to, [now_ms(), msg], CALL_TTL_MS // 1000 + 5)
+            else:
+                q = pending_calls.setdefault(to, [])
+                q.append((now_ms(), msg))
         if kind == "offer":
             push_call(to, sender, caller["name"], bool(payload.get("video")))
+    if kind in ("hangup", "decline") and icqcluster.ENABLED:
+        await CLUSTER.drop_pending(to, payload.get("call_id"))
     if kind in ("hangup", "decline"):
         q = pending_calls.get(to)
         if q:
@@ -3429,6 +3688,8 @@ async def handle_call(sender: int, data: dict) -> None:
 
 async def flush_calls(uin: int) -> None:
     q = pending_calls.pop(uin, None)
+    if icqcluster.ENABLED:
+        q = (q or []) + [tuple(x) for x in await CLUSTER.take_pending(uin)]
     if not q:
         return
     now = now_ms()
@@ -3445,6 +3706,22 @@ def require_admin(creds: HTTPBasicCredentials = Depends(basic)) -> None:
     ok = secrets.compare_digest(creds.username, "admin") and secrets.compare_digest(creds.password, ADMIN_PASSWORD)
     if not ok:
         raise HTTPException(401, "Unauthorized", headers={"WWW-Authenticate": "Basic"})
+
+
+@app.get("/admin/api/cluster")
+def admin_cluster(_: None = Depends(require_admin)) -> dict:
+    """Servers of the cluster: which are alive, which one is the leader, how many people are online on each."""
+    info = CLUSTER.info()
+    per: Dict[str, int] = {icqcluster.NODE_ID: len(manager.conns)}
+    for u, d in CLUSTER.remote.items():
+        for n in d:
+            per[n] = per.get(n, 0) + 1
+    nodes = []
+    for n in sorted(set(info["nodes"]) | {icqcluster.NODE_ID}):
+        nodes.append({"id": n, "url": info["nodes"].get(n, icqcluster.NODE_URL), "alive": n in CLUSTER.alive,
+                      "me": n == icqcluster.NODE_ID, "online": per.get(n, 0)})
+    return {"enabled": info["enabled"], "leader": icqcluster.NODE_ID if CLUSTER.leader else None,
+            "db": "postgresql" if icqdb.IS_PG else "sqlite", "nodes": nodes, "online": manager.online_count()}
 
 
 @app.post("/admin/api/balance")
@@ -3542,7 +3819,7 @@ def admin_pending(_: None = Depends(require_admin)) -> dict:
         }
         for r in rows
     ]
-    return {"items": items, "users": users, "messages": msgs, "groups": groups, "channels": channels, "online": len(manager.conns)}
+    return {"items": items, "users": users, "messages": msgs, "groups": groups, "channels": channels, "online": manager.online_count()}
 
 
 @app.post("/admin/api/sent/{phone}")
@@ -3672,7 +3949,7 @@ input{width:100%;padding:10px 12px;border:1px solid #d5d9d7;border-radius:10px;f
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#bbb;margin-right:6px}.dot.on{background:#00CB66}
 </style></head><body>
 <header><img src="/logo.svg" alt="">ICQ — администратор</header>
-<nav><button id="t1" class="on" onclick="tab(1)">Коды входа</button><button id="t2" onclick="tab(2)">Пользователи</button><button id="t3" onclick="tab(3)">Группы и каналы</button><button id="t4" onclick="tab(4)">Галочки ✔</button><button id="t5" onclick="tab(5)">Баланс 🪙</button><button id="t6" onclick="tab(6)">Fragment 💎</button></nav>
+<nav><button id="t1" class="on" onclick="tab(1)">Коды входа</button><button id="t2" onclick="tab(2)">Пользователи</button><button id="t3" onclick="tab(3)">Группы и каналы</button><button id="t4" onclick="tab(4)">Галочки ✔</button><button id="t5" onclick="tab(5)">Баланс 🪙</button><button id="t6" onclick="tab(6)">Fragment 💎</button><button id="t7" onclick="tab(7)">Серверы 🖥</button></nav>
 <main>
 <div class="stats" id="stats"></div>
 <div id="codes"></div>
@@ -3686,6 +3963,9 @@ input{width:100%;padding:10px 12px;border:1px solid #d5d9d7;border-radius:10px;f
 <input id="fname" placeholder="@имя, например a или icq"> <input id="fprice" type="number" placeholder="Цена, Gold" style="width:120px">
 <button onclick="fragAdd()">Выставить</button>
 <div id="fres" style="margin:10px 0;font-weight:bold"></div><div id="flist"></div></div>
+<div id="servers" style="display:none">
+<p style="opacity:.8">Serwerler (klaster). Täze serwer goşmak: esasy serwerde <code>bash cluster-add.sh IP</code>, täze serwerde <code>bash cluster-join.sh KOD</code>, soňra DNS-e A ýazgy.</p>
+<div id="ninfo" style="margin:8px 0;font-weight:bold"></div><div id="nlist"></div></div>
 <div id="users" style="display:none"><input id="q" placeholder="Поиск: имя, телефон, @username или ID" oninput="loadUsers()"><div id="ulist"></div></div>
 <div id="groups" style="display:none"><input id="gq" placeholder="Поиск: название, @username или ID" oninput="loadGroups()"><div id="glist"></div></div>
 <div id="verify" style="display:none">
@@ -3699,7 +3979,7 @@ input{width:100%;padding:10px 12px;border:1px solid #d5d9d7;border-radius:10px;f
 <script>
 var cur=1;
 var CHECK='<svg width="16" height="16" viewBox="0 0 24 24" style="vertical-align:-2px;margin-left:4px"><circle cx="12" cy="12" r="11" fill="#00CB66"/><path d="M7 12.5l3.2 3.2L17 9" stroke="#fff" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-function tab(n){cur=n;if(n==5)loadBal();if(n==6)loadFrag();['codes','users','groups','verify','balance','fragment'].forEach(function(id,i){document.getElementById('t'+(i+1)).className=n==i+1?'on':'';document.getElementById(id).style.display=n==i+1?'':'none'});
+function tab(n){cur=n;if(n==5)loadBal();if(n==6)loadFrag();if(n==7)loadNodes();['codes','users','groups','verify','balance','fragment','servers'].forEach(function(id,i){document.getElementById('t'+(i+1)).className=n==i+1?'on':'';document.getElementById(id).style.display=n==i+1?'':'none'});
 if(n==2)loadUsers();if(n==3)loadGroups();}
 function verify(kind,input,on){var id=parseInt(document.getElementById(input).value);if(!id){alert('Введите ID');return}
 fetch('/admin/api/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:kind,id:id,on:on})}).then(function(r){return r.json().then(function(j){return [r.ok,j]})}).then(function(x){
@@ -3715,6 +3995,11 @@ if(x[0]){e.textContent='✅ '+x[1].name+': баланс '+x[1].balance+' Gold';d
 function fragAdd(){var b={username:document.getElementById('fname').value,price:parseInt(document.getElementById('fprice').value||'0')};
 fetch('/admin/api/fragment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(function(r){return r.json().then(function(j){return [r.ok,j]})}).then(function(x){var e=document.getElementById('fres');
 if(x[0]){e.textContent=x[1].removed?('🗑 @'+x[1].removed+' снято с продажи'):('✅ @'+x[1].username+' — '+x[1].price+' Gold');document.getElementById('fname').value='';loadFrag()}else{e.textContent='❌ '+(x[1].detail||'Ошибка')}})}
+function loadNodes(){fetch('/admin/api/cluster').then(function(r){return r.json()}).then(function(j){
+document.getElementById('ninfo').textContent=(j.enabled?'Klaster: '+j.nodes.length+' serwer':'Bir serwer (klaster ýok)')+' · baza: '+j.db+' · onlaýn: '+j.online;
+var l=document.getElementById('nlist');l.innerHTML='';j.nodes.forEach(function(n){var d=el('div','row');
+d.appendChild(el('div','phone',(n.alive?'🟢 ':'🔴 ')+n.id+(n.me?' (şu)':'')+(j.leader==n.id?' · lider':'')));
+d.appendChild(el('div','',(n.url||'')+' · onlaýn: '+n.online+(n.alive?'':' · IŞLEMEÝÄR')));l.appendChild(d)})})}
 function loadFrag(){fetch('/admin/api/fragment').then(function(r){return r.json()}).then(function(list){var l=document.getElementById('flist');l.innerHTML='';
 list.forEach(function(it){var d=el('div','row');d.appendChild(el('div','phone','@'+it.username+' · '+it.price+' Gold'));d.appendChild(el('div','',it.sold_to?('продано: '+(it.buyer||it.sold_to)+' · '+fmt(it.sold_ts)):'в продаже'));l.appendChild(d)})})}
 function loadBal(){fetch('/admin/api/balance').then(function(r){return r.json()}).then(function(list){var l=document.getElementById('blog');l.innerHTML='';
@@ -4501,6 +4786,7 @@ async def ws_endpoint(ws: WebSocket, token: str = Query("")) -> None:
         return
     await ws.accept()
     manager.ws_tokens[id(ws)] = token
+    CLUSTER.token_on(token)
     with conn() as c:
         c.execute("UPDATE tokens SET last_used=? WHERE token=?", (now_ms(), token))
     was_online = manager.online(uin)
@@ -4523,7 +4809,7 @@ async def ws_endpoint(ws: WebSocket, token: str = Query("")) -> None:
                 if kind in ("message", "typing", "read") and id(ws) in manager.idle:
                     # somebody who writes is clearly in the app, whatever the last "state" said
                     before = manager.online(uin)
-                    manager.idle.discard(id(ws))
+                    manager.set_idle(uin, ws, False)
                     if not before:
                         await broadcast_presence(uin, True)
                 if kind == "message":
@@ -4544,10 +4830,7 @@ async def ws_endpoint(ws: WebSocket, token: str = Query("")) -> None:
                     await handle_call(uin, data)
                 elif kind == "state":  # app went to foreground / background
                     before = manager.online(uin)
-                    if data.get("active"):
-                        manager.idle.discard(id(ws))
-                    else:
-                        manager.idle.add(id(ws))
+                    manager.set_idle(uin, ws, not data.get("active"))
                     after = manager.online(uin)
                     if before != after:
                         await broadcast_presence(uin, after)
@@ -4564,6 +4847,8 @@ async def ws_endpoint(ws: WebSocket, token: str = Query("")) -> None:
     finally:
         before = manager.online(uin)
         manager.ws_tokens.pop(id(ws), None)
+        if token not in manager.ws_tokens.values():
+            CLUSTER.token_off(token)
         manager.remove(uin, ws)
         if before and not manager.online(uin):
             await broadcast_presence(uin, False)

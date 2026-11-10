@@ -16,11 +16,13 @@ PORT=8000
 echo "==> Paketler gurulýar"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-apt-get install -y python3 python3-venv python3-pip curl coturn iptables
+apt-get install -y python3 python3-venv python3-pip curl coturn iptables redis-tools
 
 echo "==> Faýllar $DEST ýerine göçürilýär (baza we faýllar saklanýar)"
 mkdir -p "$DEST"
-cp "$SRC/server.py" "$SRC/apkdelta.py" "$SRC/requirements.txt" "$SRC/ssl.sh" "$DEST/"
+cp "$SRC/server.py" "$SRC/apkdelta.py" "$SRC/db.py" "$SRC/cluster.py" "$SRC/migrate_to_pg.py" \
+   "$SRC/requirements.txt" "$SRC/ssl.sh" "$SRC/acme-hook.sh" "$SRC/acme-clean.sh" "$SRC/cluster-fw.sh" "$DEST/"
+chmod +x "$DEST/acme-hook.sh" "$DEST/acme-clean.sh" "$DEST/cluster-fw.sh"
 # saýt (icq-new.ru) we web wersiýa (icq-new.online)
 rm -rf "$DEST/web" && cp -r "$SRC/web" "$DEST/web"
 # programma: server/apk/icq-new.apk goýsaň, saýtdan "Скачать" bilen ýüklenýär
@@ -92,7 +94,7 @@ After=network.target
 WorkingDirectory=$DEST
 Environment=ICQ_DB=$DEST/icq_v2.db
 EnvironmentFile=-$DEST/icq.env
-ExecStart=$DEST/.venv/bin/uvicorn server:app --host 0.0.0.0 --port $PORT
+ExecStart=$DEST/.venv/bin/uvicorn server:app --host 0.0.0.0 --port $PORT --timeout-graceful-shutdown 5
 Restart=always
 RestartSec=3
 
