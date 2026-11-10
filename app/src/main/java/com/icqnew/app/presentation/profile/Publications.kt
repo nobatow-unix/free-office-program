@@ -54,8 +54,12 @@ fun ProfileMediaTabs(
     var reload by remember { mutableIntStateOf(0) }
     val stories = remember { mutableStateMapOf<String, List<Story>>() }
     val k = kinds[kind].first
+    var failed by remember { mutableStateOf(false) }
     LaunchedEffect(user.uin, k, reload) {
-        runCatching { container.chatRepository.publications(user.uin, k) }.onSuccess { stories[k] = it }
+        failed = false
+        runCatching { container.chatRepository.publications(user.uin, k) }
+            .onSuccess { stories[k] = it }
+            .onFailure { failed = true }
     }
     var open by remember { mutableStateOf<Int?>(null) }
 
@@ -82,6 +86,13 @@ fun ProfileMediaTabs(
             Spacer(Modifier.height(8.dp))
             val list = stories[k]
             when {
+                list == null && failed -> Column(
+                    Modifier.fillMaxWidth().padding(vertical = 20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text("Не удалось загрузить публикации", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    TextButton(onClick = { reload++ }) { Text("Повторить") }
+                }
                 list == null -> Box(Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(Modifier.size(28.dp))
                 }

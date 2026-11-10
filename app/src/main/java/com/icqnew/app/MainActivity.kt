@@ -105,7 +105,8 @@ class MainActivity : ComponentActivity() {
                         val callUi by container.callManager.state.collectAsStateWithLifecycle()
                         val callFolded by container.callManager.minimized.collectAsStateWithLifecycle()
                         val voiceUi by container.voicePlayer.state.collectAsStateWithLifecycle()
-                        val homeShown by container.homeOnScreen.collectAsStateWithLifecycle()
+                        val inlineHosts by container.homeOnScreen.collectAsStateWithLifecycle()
+                        val homeShown = inlineHosts > 0
                         val barsShown = !homeShown && voiceUi.playingId != null ||
                             !homeShown &&
                             (callFolded && callUi != null && callUi?.phase != com.icqnew.app.data.call.CallPhase.ENDED &&

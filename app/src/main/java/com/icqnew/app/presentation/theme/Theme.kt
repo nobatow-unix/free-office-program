@@ -124,6 +124,28 @@ private fun rubik(w: Int) = androidx.compose.ui.text.font.Font(
 
 val Rubik = androidx.compose.ui.text.font.FontFamily(rubik(300), rubik(400), rubik(500), rubik(600), rubik(700), rubik(800))
 
+/**
+ * «Fancy font» text (𝓷𝓸𝓫𝓪𝓽𝓸𝔀, ɴᴏʙᴀᴛᴏᴡ, ⓝⓞⓑ, Greek look-alikes, combining strokes…) has letters Rubik
+ * does not have: mixed with fallback glyphs it looked broken. Such text is drawn with the system font.
+ */
+fun hasExoticLetters(text: String): Boolean {
+    var i = 0
+    while (i < text.length) {
+        val cp = text.codePointAt(i)
+        val exotic = cp in 0x0250..0x02FF || cp in 0x0300..0x036F || cp in 0x0370..0x03FF || cp in 0x1D00..0x1DBF ||
+            cp in 0x2100..0x214F || cp in 0x2460..0x24FF || cp in 0xA720..0xA7FF || cp in 0xFF00..0xFFEF ||
+            cp in 0x1D400..0x1D7FF || cp in 0x1F130..0x1F189 || cp in 0x13A0..0x13FF || cp in 0x0E00..0x0E7F ||
+            cp in 0x0600..0x06FF || cp in 0x4E00..0x9FFF || cp in 0x0900..0x097F || cp in 0x10A0..0x10FF
+        if (exotic) return true
+        i += Character.charCount(cp)
+    }
+    return false
+}
+
+/** Rubik for ordinary text, the system font for «fancy font» text. */
+fun fontFor(text: String): androidx.compose.ui.text.font.FontFamily? =
+    if (hasExoticLetters(text)) androidx.compose.ui.text.font.FontFamily.Default else null
+
 /** Big titles get a soft drop shadow, so the letters look slightly raised ("3D"). */
 private val Raised = androidx.compose.ui.graphics.Shadow(
     color = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.28f),

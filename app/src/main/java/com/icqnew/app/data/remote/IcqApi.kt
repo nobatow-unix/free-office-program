@@ -59,6 +59,11 @@ class IcqApi(private val client: HttpClient, private val store: SessionStore) {
 
     suspend fun qrPoll(code: String): QrPollDto = get("/api/qr/$code")
 
+    // ---- Fragment: @names for Gold ----
+    suspend fun fragment(): FragmentDto = get("/api/fragment")
+
+    suspend fun fragmentBuy(u: String): UsernamesDto = post("/api/fragment/buy", UsernameRequest(u))
+
     // ---- extra @usernames ----
     suspend fun myUsernames(): UsernamesDto = get("/api/me/usernames")
 

@@ -295,6 +295,11 @@ def init_db() -> None:
         _add_column(c, "users", "balance INTEGER NOT NULL DEFAULT 0")
         # publications stay in the profile after their 24 h in the ring; reposts point to the original
         _add_column(c, "users", "pw_hash TEXT")
+        # Fragment: @names on sale for Gold (the admin puts short / nice ones up, 1–3 letters included)
+        c.execute(
+            "CREATE TABLE IF NOT EXISTS fragment_lots(username TEXT PRIMARY KEY COLLATE NOCASE, price INTEGER NOT NULL,"
+            " ts INTEGER NOT NULL, sold_to INTEGER, sold_ts INTEGER)"
+        )
         c.execute(
             "CREATE TABLE IF NOT EXISTS user_usernames(username TEXT PRIMARY KEY COLLATE NOCASE, uin INTEGER NOT NULL, ts INTEGER NOT NULL)"
         )
@@ -1415,8 +1420,8 @@ async def update_me(body: ProfileIn, authorization: Optional[str] = Header(None)
             c.execute("UPDATE users SET birthday=? WHERE uin=?", (b or None, uin))
         if body.channel_id is not None:
             if body.channel_id:
-                g = c.execute("SELECT kind FROM groups WHERE id=?", (body.channel_id,)).fetchone()
-                if not g or g["kind"] != "channel" or not is_admin(c, body.channel_id, uin):
+                g = c.execute("SELECT kind, owner FROM groups WHERE id=?", (body.channel_id,)).fetchone()
+                if not g or g["kind"] != "channel" or g["owner"] != uin:
                     raise HTTPException(400, "Можно указать только свой канал")
             c.execute("UPDATE users SET channel_id=? WHERE uin=?", (body.channel_id or None, uin))
         if body.color is not None:
@@ -1521,6 +1526,9 @@ def check_username(c: sqlite3.Connection, raw: str, uin: Optional[int] = None, g
     x = c.execute("SELECT uin FROM user_usernames WHERE username=?", (un,)).fetchone()
     if x and (x["uin"] != uin or group_id is not None):
         raise HTTPException(409, "Это имя уже занято")
+    lot = c.execute("SELECT sold_to FROM fragment_lots WHERE username=?", (un,)).fetchone()
+    if lot and lot["sold_to"] is None:
+        raise HTTPException(409, "Это имя продаётся на Fragment")
     return un
 
 
@@ -1542,12 +1550,23 @@ def my_usernames(authorization: Optional[str] = Header(None)) -> dict:
     uin = require_uin(authorization)
     with conn() as c:
         rows = c.execute("SELECT username FROM user_usernames WHERE uin=? ORDER BY ts", (uin,)).fetchall()
-        return {"usernames": [r["username"] for r in rows], "limit": 5 if is_premium(c, uin) else 2}
+        return {"usernames": [r["username"] for r in rows], "limit": EXTRA_USERNAMES_MAX, "price": FRAGMENT_PRICE}
+
+
+FRAGMENT_PRICE = int(os.environ.get("ICQ_FRAGMENT_PRICE", "50"))  # any free @name (4+ letters), Gold
+EXTRA_USERNAMES_MAX = 10
+LOT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_]{0,31}$")
+
+
+def _extra_slot_check(c: sqlite3.Connection, uin: int) -> None:
+    n = c.execute("SELECT COUNT(*) AS n FROM user_usernames WHERE uin=?", (uin,)).fetchone()["n"]
+    if n >= EXTRA_USERNAMES_MAX:
+        raise HTTPException(400, f"Максимум {EXTRA_USERNAMES_MAX} дополнительных имён")
 
 
 @app.post("/api/me/usernames")
 async def add_username(body: ExtraUsernameIn, authorization: Optional[str] = Header(None)) -> dict:
-    """Extra @names for the same account (2, with Premium 5)."""
+    """Fragment: buy any free @name (4+ letters) as an extra name for FRAGMENT_PRICE Gold."""
     uin = require_uin(authorization)
     with conn() as c:
         un = check_username(c, body.username, uin=uin)
@@ -1556,13 +1575,47 @@ async def add_username(body: ExtraUsernameIn, authorization: Optional[str] = Hea
         me = c.execute("SELECT username FROM users WHERE uin=?", (uin,)).fetchone()
         if (me["username"] or "").lower() == un.lower():
             raise HTTPException(400, "Это ваше основное имя")
-        n = c.execute("SELECT COUNT(*) AS n FROM user_usernames WHERE uin=?", (uin,)).fetchone()["n"]
-        limit = 5 if is_premium(c, uin) else 2
-        if n >= limit:
-            raise HTTPException(402, "Больше имён — с ICQ Premium" if limit == 2 else "Максимум 5 дополнительных имён")
-        c.execute("INSERT OR IGNORE INTO user_usernames(username, uin, ts) VALUES(?,?,?)", (un, uin, now_ms()))
+        if c.execute("SELECT 1 FROM user_usernames WHERE username=?", (un,)).fetchone():
+            raise HTTPException(400, "Это имя уже ваше")
+        _extra_slot_check(c, uin)
+        _charge(c, uin, FRAGMENT_PRICE, f"Fragment: @{un}")
+        c.execute("INSERT INTO user_usernames(username, uin, ts) VALUES(?,?,?)", (un, uin, now_ms()))
     await broadcast_profile(uin)
     return my_usernames(authorization)
+
+
+@app.get("/api/fragment")
+def fragment(authorization: Optional[str] = Header(None)) -> dict:
+    """Fragment: the @names on sale (set by the admin) + the price of any other free name."""
+    uin = require_uin(authorization)
+    with conn() as c:
+        rows = c.execute("SELECT username, price FROM fragment_lots WHERE sold_to IS NULL ORDER BY length(username), price DESC").fetchall()
+        bal = c.execute("SELECT balance FROM users WHERE uin=?", (uin,)).fetchone()["balance"] or 0
+        return {"lots": [{"username": r["username"], "price": r["price"]} for r in rows],
+                "custom_price": FRAGMENT_PRICE, "balance": bal}
+
+
+class BuyLotIn(BaseModel):
+    username: str
+
+
+@app.post("/api/fragment/buy")
+async def fragment_buy(body: BuyLotIn, authorization: Optional[str] = Header(None)) -> dict:
+    uin = require_uin(authorization)
+    name = body.username.strip().lstrip("@")
+    with conn() as c:
+        lot = c.execute("SELECT * FROM fragment_lots WHERE username=?", (name,)).fetchone()
+        if not lot or lot["sold_to"] is not None:
+            raise HTTPException(404, "Это имя уже продано")
+        _extra_slot_check(c, uin)
+        _charge(c, uin, lot["price"], f"Fragment: @{lot['username']}")
+        c.execute("UPDATE fragment_lots SET sold_to=?, sold_ts=? WHERE username=?", (uin, now_ms(), lot["username"]))
+        c.execute("INSERT OR REPLACE INTO user_usernames(username, uin, ts) VALUES(?,?,?)", (lot["username"], uin, now_ms()))
+    await broadcast_profile(uin)
+    asyncio.create_task(service_send(uin, f"💎 Имя **@{lot['username']}** теперь ваше (Fragment)."))
+    return my_usernames(authorization)
+
+
 
 
 @app.delete("/api/me/usernames/{name}")
@@ -2236,14 +2289,15 @@ def premium_info(authorization: Optional[str] = Header(None)) -> dict:
         u = c.execute("SELECT balance, premium_until FROM users WHERE uin=?", (uin,)).fetchone()
         log = c.execute("SELECT delta, reason, ts FROM balance_log WHERE uin=? ORDER BY id DESC LIMIT 30", (uin,)).fetchall()
         groups = c.execute(
-            "SELECT g.id, g.name, g.kind, g.premium_until FROM groups g JOIN group_members m ON m.gid=g.id"
+            "SELECT g.id, g.name, g.kind, g.premium_until, g.owner FROM groups g JOIN group_members m ON m.gid=g.id"
             " WHERE m.uin=? AND (g.owner=? OR m.role IN ('owner','admin')) ORDER BY g.name", (uin, uin),
         ).fetchall()
     return {
         "balance": u["balance"] or 0, "premium_until": u["premium_until"] or 0, "currency": "Gold",
         "plans": PREMIUM_PLANS, "group_plans": GROUP_PLANS, "gifts": GIFTS, "perks": PREMIUM_PERKS,
         "history": [{"delta": r["delta"], "reason": r["reason"], "ts": r["ts"]} for r in log],
-        "my_groups": [{"id": g["id"], "name": g["name"], "kind": g["kind"], "premium_until": g["premium_until"] or 0}
+        "my_groups": [{"id": g["id"], "name": g["name"], "kind": g["kind"], "premium_until": g["premium_until"] or 0,
+                       "owner": g["owner"] == uin}
                       for g in groups],
         "top_up": "Чтобы пополнить баланс, напишите в поддержку: оплата принимается вручную, "
                   "администратор зачислит сумму, и придёт уведомление от «ICQ».",
@@ -3098,6 +3152,8 @@ def cleanup_storage() -> dict:
     removed, freed = 0, 0
     day_ago = now_ms() - 86_400_000
     with conn() as c:
+        # sessions nobody used for 120 days (old installs, lost phones) disappear from «Устройства»
+        c.execute("DELETE FROM tokens WHERE max(COALESCE(last_used,0), created) < ?", (now_ms() - 120 * 86_400_000,))
         rows = c.execute(
             "SELECT id, path, size FROM files f WHERE f.created<? AND"
             " NOT EXISTS (SELECT 1 FROM messages m WHERE m.att_id=f.id) AND"
@@ -3432,6 +3488,39 @@ def admin_balance_log(_: None = Depends(require_admin)) -> list:
         return [{"uin": r["uin"], "name": r["name"], "delta": r["delta"], "reason": r["reason"], "ts": r["ts"]} for r in rows]
 
 
+@app.post("/admin/api/fragment")
+def admin_fragment_add(body: dict, _: None = Depends(require_admin)) -> dict:
+    """Put an @name on sale: {username, price}. price <= 0 removes an unsold lot."""
+    name = str(body.get("username") or "").strip().lstrip("@")
+    try:
+        price = int(body.get("price") or 0)
+    except (TypeError, ValueError):
+        price = 0
+    if not LOT_RE.match(name):
+        raise HTTPException(400, "Имя: латиница, цифры и _, до 32 символов")
+    with conn() as c:
+        if price <= 0:
+            c.execute("DELETE FROM fragment_lots WHERE username=? AND sold_to IS NULL", (name,))
+            return {"ok": True, "removed": name}
+        taken = (c.execute("SELECT 1 FROM users WHERE lower(username)=lower(?)", (name,)).fetchone()
+                 or c.execute("SELECT 1 FROM groups WHERE lower(username)=lower(?)", (name,)).fetchone()
+                 or c.execute("SELECT 1 FROM user_usernames WHERE username=?", (name,)).fetchone())
+        if taken:
+            raise HTTPException(409, "Это имя уже занято")
+        c.execute("INSERT OR REPLACE INTO fragment_lots(username, price, ts) VALUES(?,?,?)", (name, price, now_ms()))
+    return {"ok": True, "username": name, "price": price}
+
+
+@app.get("/admin/api/fragment")
+def admin_fragment_list(_: None = Depends(require_admin)) -> list:
+    with conn() as c:
+        rows = c.execute(
+            "SELECT f.*, u.name FROM fragment_lots f LEFT JOIN users u ON u.uin=f.sold_to ORDER BY f.sold_to IS NOT NULL, f.ts DESC LIMIT 300"
+        ).fetchall()
+        return [{"username": r["username"], "price": r["price"], "sold_to": r["sold_to"], "buyer": r["name"],
+                 "sold_ts": r["sold_ts"]} for r in rows]
+
+
 @app.get("/admin/api/pending")
 def admin_pending(_: None = Depends(require_admin)) -> dict:
     now = now_ms()
@@ -3583,7 +3672,7 @@ input{width:100%;padding:10px 12px;border:1px solid #d5d9d7;border-radius:10px;f
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#bbb;margin-right:6px}.dot.on{background:#00CB66}
 </style></head><body>
 <header><img src="/logo.svg" alt="">ICQ — администратор</header>
-<nav><button id="t1" class="on" onclick="tab(1)">Коды входа</button><button id="t2" onclick="tab(2)">Пользователи</button><button id="t3" onclick="tab(3)">Группы и каналы</button><button id="t4" onclick="tab(4)">Галочки ✔</button><button id="t5" onclick="tab(5)">Баланс ⭐</button></nav>
+<nav><button id="t1" class="on" onclick="tab(1)">Коды входа</button><button id="t2" onclick="tab(2)">Пользователи</button><button id="t3" onclick="tab(3)">Группы и каналы</button><button id="t4" onclick="tab(4)">Галочки ✔</button><button id="t5" onclick="tab(5)">Баланс 🪙</button><button id="t6" onclick="tab(6)">Fragment 💎</button></nav>
 <main>
 <div class="stats" id="stats"></div>
 <div id="codes"></div>
@@ -3592,6 +3681,11 @@ input{width:100%;padding:10px 12px;border:1px solid #d5d9d7;border-radius:10px;f
 <input id="bwho" placeholder="ID, телефон или @username"> <input id="bamt" type="number" placeholder="Сумма, Gold" style="width:120px">
 <input id="breason" placeholder="Комментарий (необязательно)"> <button onclick="topUp()">Зачислить</button>
 <div id="bres" style="margin:10px 0;font-weight:bold"></div><div id="blog"></div></div>
+<div id="fragment" style="display:none">
+<p style="opacity:.8">Fragment: @имена на продажу за Gold (можно и короткие: 1–3 буквы). Любое другое свободное имя пользователь покупает сам по обычной цене. Цена 0 — снять с продажи.</p>
+<input id="fname" placeholder="@имя, например a или icq"> <input id="fprice" type="number" placeholder="Цена, Gold" style="width:120px">
+<button onclick="fragAdd()">Выставить</button>
+<div id="fres" style="margin:10px 0;font-weight:bold"></div><div id="flist"></div></div>
 <div id="users" style="display:none"><input id="q" placeholder="Поиск: имя, телефон, @username или ID" oninput="loadUsers()"><div id="ulist"></div></div>
 <div id="groups" style="display:none"><input id="gq" placeholder="Поиск: название, @username или ID" oninput="loadGroups()"><div id="glist"></div></div>
 <div id="verify" style="display:none">
@@ -3605,7 +3699,7 @@ input{width:100%;padding:10px 12px;border:1px solid #d5d9d7;border-radius:10px;f
 <script>
 var cur=1;
 var CHECK='<svg width="16" height="16" viewBox="0 0 24 24" style="vertical-align:-2px;margin-left:4px"><circle cx="12" cy="12" r="11" fill="#00CB66"/><path d="M7 12.5l3.2 3.2L17 9" stroke="#fff" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-function tab(n){cur=n;if(n==5)loadBal();['codes','users','groups','verify','balance'].forEach(function(id,i){document.getElementById('t'+(i+1)).className=n==i+1?'on':'';document.getElementById(id).style.display=n==i+1?'':'none'});
+function tab(n){cur=n;if(n==5)loadBal();if(n==6)loadFrag();['codes','users','groups','verify','balance','fragment'].forEach(function(id,i){document.getElementById('t'+(i+1)).className=n==i+1?'on':'';document.getElementById(id).style.display=n==i+1?'':'none'});
 if(n==2)loadUsers();if(n==3)loadGroups();}
 function verify(kind,input,on){var id=parseInt(document.getElementById(input).value);if(!id){alert('Введите ID');return}
 fetch('/admin/api/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:kind,id:id,on:on})}).then(function(r){return r.json().then(function(j){return [r.ok,j]})}).then(function(x){
@@ -3618,6 +3712,11 @@ function loadGroups(){var q=document.getElementById('gq').value;fetch('/admin/ap
 function topUp(){var b={who:document.getElementById('bwho').value,amount:parseInt(document.getElementById('bamt').value||'0'),reason:document.getElementById('breason').value};
 fetch('/admin/api/balance',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(function(r){return r.json().then(function(j){return [r.ok,j]})}).then(function(x){var e=document.getElementById('bres');
 if(x[0]){e.textContent='✅ '+x[1].name+': баланс '+x[1].balance+' Gold';document.getElementById('bamt').value='';loadBal()}else{e.textContent='❌ '+(x[1].detail||'Ошибка')}})}
+function fragAdd(){var b={username:document.getElementById('fname').value,price:parseInt(document.getElementById('fprice').value||'0')};
+fetch('/admin/api/fragment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(function(r){return r.json().then(function(j){return [r.ok,j]})}).then(function(x){var e=document.getElementById('fres');
+if(x[0]){e.textContent=x[1].removed?('🗑 @'+x[1].removed+' снято с продажи'):('✅ @'+x[1].username+' — '+x[1].price+' Gold');document.getElementById('fname').value='';loadFrag()}else{e.textContent='❌ '+(x[1].detail||'Ошибка')}})}
+function loadFrag(){fetch('/admin/api/fragment').then(function(r){return r.json()}).then(function(list){var l=document.getElementById('flist');l.innerHTML='';
+list.forEach(function(it){var d=el('div','row');d.appendChild(el('div','phone','@'+it.username+' · '+it.price+' Gold'));d.appendChild(el('div','',it.sold_to?('продано: '+(it.buyer||it.sold_to)+' · '+fmt(it.sold_ts)):'в продаже'));l.appendChild(d)})})}
 function loadBal(){fetch('/admin/api/balance').then(function(r){return r.json()}).then(function(list){var l=document.getElementById('blog');l.innerHTML='';
 list.forEach(function(it){var d=el('div','row');d.appendChild(el('div','phone',(it.delta>0?'+':'')+it.delta+' Gold · '+(it.name||it.uin)));d.appendChild(el('div','',it.reason+' · '+fmt(it.ts)));l.appendChild(d)})})}
 function el(t,c,txt){var e=document.createElement(t);if(c)e.className=c;if(txt!=null)e.textContent=txt;return e}
@@ -3984,18 +4083,22 @@ async def handle_read(reader: int, data: dict) -> None:
 
 async def handle_typing(uin: int, data: dict) -> None:
     gid = _int(data.get("group"))
+    # "" = typing, "voice" = recording a voice message, "video" = recording a round video
+    action = str(data.get("action") or "")
+    if action not in ("voice", "video"):
+        action = ""
     with conn() as c:
         if gid is not None:
             if not is_member(c, gid, uin):
                 return
             targets = [m for m in group_members(c, gid) if m != uin]
-            payload = {"type": "typing", "gid": gid, "uin": uin}
+            payload = {"type": "typing", "gid": gid, "uin": uin, "action": action}
         else:
             to = _int(data.get("to"))
             if to is None or is_blocked(c, to, uin):
                 return
             targets = [to]
-            payload = {"type": "typing", "uin": uin}
+            payload = {"type": "typing", "uin": uin, "action": action}
     await manager.send_many(targets, payload)
 
 

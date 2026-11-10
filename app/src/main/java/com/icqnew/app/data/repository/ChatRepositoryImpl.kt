@@ -529,6 +529,27 @@ class ChatRepositoryImpl(
         api.setPassword(password, old)
     }
 
+    override suspend fun fragment() = api.fragment()
+
+    override suspend fun fragmentBuy(name: String) {
+        api.fragmentBuy(name.trim().removePrefix("@"))
+    }
+
+    private val actions = java.util.concurrent.ConcurrentHashMap<Long, String>()
+
+    override fun typingAction(uin: Long): String = actions[uin].orEmpty()
+
+    private var lastRecordingSent = 0L
+
+    override fun notifyRecording(peer: Long, action: String) {
+        val now = System.currentTimeMillis()
+        if (now - lastRecordingSent < 2_500) return
+        lastRecordingSent = now
+        scope.launch {
+            if (store.snapshot().sendTyping) socket.send(target(peer, "typing").copy(action = action))
+        }
+    }
+
     override suspend fun markStorySeen(id: Long) {
         runCatching { api.viewStory(id) }
         _stories.value = _stories.value.map { g ->
@@ -947,6 +968,7 @@ class ChatRepositoryImpl(
                     if (uin != com.icqnew.app.domain.BOT_UIN) markOnline(uin)
                     val peer = ev.gid?.let { groupPeer(it) } ?: uin
                     val until = System.currentTimeMillis() + 4_500
+                    actions[uin] = ev.action.orEmpty()
                     typing.update { all -> all + (peer to ((all[peer] ?: emptyMap()) + (uin to until))) }
                 }
             }

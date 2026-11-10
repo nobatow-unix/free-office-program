@@ -423,7 +423,12 @@ fun SettingsTab(
             title = { Text("Устройства") },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
-                    if (sessions.isEmpty()) Text("Загрузка…")
+                    var waited by remember { mutableStateOf(false) }
+                    LaunchedEffect(Unit) { kotlinx.coroutines.delay(5_000); waited = true }
+                    if (sessions.isEmpty()) {
+                        if (!waited) Text("Загрузка…")
+                        else TextButton(onClick = { waited = false; vm.loadSessions() }) { Text("Не удалось загрузить · повторить") }
+                    }
                     sessions.forEach { d ->
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 6.dp)) {
                             Box(

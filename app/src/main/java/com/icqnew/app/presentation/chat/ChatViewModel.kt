@@ -212,6 +212,11 @@ class ChatViewModel(
     private val _recStart = MutableStateFlow(0L)
     val recStart: StateFlow<Long> = _recStart.asStateFlow()
 
+    fun notifyRecording(action: String) = repo.notifyRecording(peerUin, action)
+
+    /** "" typing, "voice" / "video" recording — for the chat header */
+    fun typingAction(uin: Long): String = repo.typingAction(uin)
+
     fun startRecording(): Boolean {
         val ok = recorder.start()
         _recording.value = ok
@@ -220,6 +225,7 @@ class ChatViewModel(
             _levels.value = emptyList()
             viewModelScope.launch {
                 while (_recording.value) {
+                    repo.notifyRecording(peerUin, "voice") // the other side sees «записывает голосовое…»
                     _levels.value = (_levels.value + recorder.level()).takeLast(40)
                     kotlinx.coroutines.delay(90)
                 }

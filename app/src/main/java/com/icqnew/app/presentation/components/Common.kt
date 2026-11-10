@@ -333,9 +333,12 @@ fun TypingDots(color: Color, modifier: Modifier = Modifier, dot: Dp = 5.dp) {
 @Composable
 fun TypingLabel(text: String, color: Color, fontSize: TextUnit = 12.sp) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(text, color = color, fontSize = fontSize, maxLines = 1)
+        Text(text, color = color, fontSize = fontSize, maxLines = 1, lineHeight = fontSize * 1.2f)
         Spacer(Modifier.width(4.dp))
-        TypingDots(color, Modifier.padding(top = 3.dp), dot = 4.dp)
+        // the dots bounce inside a fixed box, so the text line keeps its height
+        Box(Modifier.height(10.dp), contentAlignment = Alignment.BottomCenter) {
+            TypingDots(color, Modifier.padding(top = 3.dp), dot = 4.dp)
+        }
     }
 }
 

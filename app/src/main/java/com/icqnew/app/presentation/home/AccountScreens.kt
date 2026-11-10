@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.Cake
 import androidx.compose.material.icons.filled.CardGiftcard
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.Diamond
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Lock
@@ -591,7 +592,7 @@ private fun PasswordDialog(hasPassword: Boolean, onDismiss: () -> Unit, onSave: 
 
 /** «Изменить»: photo, name, surname, @username, about, e-mail, birthday, colour, my channel. */
 @Composable
-fun EditAccountPage(vm: HomeViewModel, onPickAvatar: () -> Unit, onDone: () -> Unit) {
+fun EditAccountPage(vm: HomeViewModel, onPickAvatar: () -> Unit, onDone: () -> Unit, onFragment: () -> Unit = {}) {
     val session by vm.session.collectAsStateWithLifecycle()
     val profile by vm.myProfile.collectAsStateWithLifecycle()
     val chats by vm.chats.collectAsStateWithLifecycle()
@@ -613,7 +614,11 @@ fun EditAccountPage(vm: HomeViewModel, onPickAvatar: () -> Unit, onDone: () -> U
         hint = vm.checkUsername(v) ?: "✔ Имя свободно"
     }
     val premium = p?.premium == true
-    val channels = chats.orEmpty().filter { it.peer.isChannel }.map { it.peer }
+    val premiumInfo by vm.premium.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { vm.loadPremium(silent = true) }
+    // only channels I created myself
+    val ownedIds = premiumInfo?.myGroups.orEmpty().filter { it.owner && it.kind == "channel" }.map { -it.id }.toSet()
+    val channels = chats.orEmpty().filter { it.peer.isChannel && it.peer.uin in ownedIds }.map { it.peer }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 30.dp)) {
         Column(Modifier.fillMaxWidth().padding(top = 14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Box(Modifier.clickable(onClick = onPickAvatar)) {
@@ -634,7 +639,7 @@ fun EditAccountPage(vm: HomeViewModel, onPickAvatar: () -> Unit, onDone: () -> U
             hint?.let { Text(it, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 color = if (it.startsWith("✔")) Color(0xFF22C55E) else MaterialTheme.colorScheme.error) }
         }
-        ExtraUsernames()
+        ExtraUsernames(onFragment)
         Card("О себе") { Field(about, { about = it.take(140) }, "Пара слов о себе") }
         Card("Контакты") {
             Field(email, { email = it.trim().take(80) }, "Email", KeyboardType.Email)
@@ -700,17 +705,14 @@ fun supportPeer(info: com.icqnew.app.data.remote.PremiumInfoDto?): Long =
     info?.supportUin?.takeIf { it != 0L } ?: com.icqnew.app.domain.BOT_UIN
 
 
-/** More @names for the same account (2, with Premium 5): each one finds you and opens your profile. */
+/** Extra @names for the same account: they are bought on Fragment (for Gold), each one finds you. */
 @Composable
-private fun ExtraUsernames() {
+private fun ExtraUsernames(onFragment: () -> Unit) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val repo = ctx.appContainer().chatRepository
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     var list by remember { mutableStateOf<List<String>>(emptyList()) }
-    var limit by remember { mutableStateOf(2) }
-    var adding by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(Unit) { runCatching { repo.myUsernames() }.onSuccess { list = it.first; limit = it.second } }
+    LaunchedEffect(Unit) { runCatching { repo.myUsernames() }.onSuccess { list = it.first } }
     Card("Другие имена пользователя") {
         list.forEach { u ->
             Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -718,26 +720,113 @@ private fun ExtraUsernames() {
                 Spacer(Modifier.width(12.dp))
                 Text("@$u", fontSize = 15.sp, modifier = Modifier.weight(1f))
                 TextButton(onClick = {
-                    scope.launch { runCatching { repo.removeUsername(u) }.onSuccess { list = it.first; limit = it.second } }
+                    scope.launch { runCatching { repo.removeUsername(u) }.onSuccess { list = it.first } }
                 }) { Text("Убрать", color = MaterialTheme.colorScheme.error) }
             }
         }
-        if (list.size < limit) {
-            Row(Modifier.fillMaxWidth().padding(end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.weight(1f)) { Field(adding, { adding = it.trim().removePrefix("@").take(32); error = null }, "Ещё одно @имя") }
-                TextButton(enabled = adding.length >= 4, onClick = {
-                    scope.launch {
-                        runCatching { repo.addUsername(adding) }
-                            .onSuccess { list = it.first; limit = it.second; adding = "" }
-                            .onFailure { error = it.message ?: "Не удалось" }
-                    }
-                }) { Text("Добавить") }
+        Row2(Icons.Filled.Diamond, "Fragment — купить @имя", "короткие и красивые имена за Gold", tint = Color(0xFF2F8CFF)) {
+            onFragment()
+        }
+    }
+}
+
+/** Fragment: @names on sale for Gold (short ones are put up by the admin) and any other free name. */
+@Composable
+fun FragmentPage(vm: HomeViewModel) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val repo = ctx.appContainer().chatRepository
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val session by vm.session.collectAsStateWithLifecycle()
+    var info by remember { mutableStateOf<com.icqnew.app.data.remote.FragmentDto?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var reload by remember { mutableStateOf(0) }
+    var custom by remember { mutableStateOf("") }
+    var hint by remember { mutableStateOf<String?>(null) }
+    var confirm by remember { mutableStateOf<Pair<String, Int>?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    LaunchedEffect(reload) {
+        runCatching { repo.fragment() }.onSuccess { info = it; error = null }.onFailure { error = it.message ?: "Нет соединения" }
+    }
+    LaunchedEffect(custom) {
+        hint = null
+        if (custom.length < 4) return@LaunchedEffect
+        kotlinx.coroutines.delay(400)
+        hint = vm.checkUsername(custom) ?: "✔ Имя свободно"
+    }
+    fun buy(name: String, lot: Boolean) {
+        busy = true
+        scope.launch {
+            runCatching { if (lot) repo.fragmentBuy(name) else repo.addUsername(name) }
+                .onSuccess {
+                    android.widget.Toast.makeText(ctx, "@$name теперь ваше", android.widget.Toast.LENGTH_SHORT).show()
+                    custom = ""
+                    session?.uin?.let { vm.loadMyProfile(it) }
+                    reload++
+                }
+                .onFailure { android.widget.Toast.makeText(ctx, it.message ?: "Не удалось", android.widget.Toast.LENGTH_LONG).show() }
+            busy = false
+        }
+    }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 30.dp)) {
+        Column(
+            Modifier.fillMaxWidth().padding(16.dp).clip(RoundedCornerShape(20.dp))
+                .background(Brush.linearGradient(listOf(Color(0xFF1B2A4A), Color(0xFF2F8CFF))))
+                .padding(18.dp),
+        ) {
+            Text("💎 Fragment", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            Text("Покупайте @имена за Gold: они найдут вас и откроют ваш профиль.", color = Color.White.copy(alpha = 0.85f), fontSize = 14.sp)
+            Spacer(Modifier.height(10.dp))
+            Text("Баланс: 🪙 ${info?.balance ?: 0} Gold", color = Color.White, fontWeight = FontWeight.SemiBold)
+        }
+        error?.let {
+            Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp))
+            TextButton(onClick = { reload++ }, modifier = Modifier.padding(horizontal = 8.dp)) { Text("Повторить") }
+        }
+        Card("В продаже") {
+            val lots = info?.lots.orEmpty()
+            if (info == null && error == null) Box(Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(Modifier.size(26.dp))
+            } else if (lots.isEmpty()) Text(
+                "Сейчас редких имён в продаже нет. Загляните позже.", fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp),
+            )
+            lots.forEach { l ->
+                Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("@" + l.username, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f))
+                    Text("🪙 ${l.price}", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.width(8.dp))
+                    androidx.compose.material3.Button(enabled = !busy, onClick = { confirm = l.username to l.price }) { Text("Купить") }
+                }
             }
         }
-        error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp)) }
-        Text(
-            "Добавлено ${list.size} из $limit" + if (limit < 5) ". С ICQ Premium — до 5." else ".",
-            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp, 4.dp, 16.dp, 10.dp),
+        Card("Своё имя") {
+            Field(custom, { custom = it.trim().removePrefix("@").take(32) }, "@имя (от 4 символов)")
+            hint?.let {
+                Text(it, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                    color = if (it.startsWith("✔")) Color(0xFF22C55E) else MaterialTheme.colorScheme.error)
+            }
+            val price = info?.customPrice ?: 50
+            androidx.compose.material3.Button(
+                enabled = !busy && hint?.startsWith("✔") == true,
+                onClick = { confirm = "*" + custom to price },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            ) { Text("Купить за $price Gold") }
+            Text(
+                "Короткие имена (1–3 символа) продаются только в разделе «В продаже». Пополнить баланс — через Поддержку.",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp, 2.dp, 16.dp, 10.dp),
+            )
+        }
+    }
+    confirm?.let { (raw, price) ->
+        val lot = !raw.startsWith("*")
+        val name = raw.removePrefix("*")
+        AlertDialog(
+            onDismissRequest = { confirm = null },
+            title = { Text("Купить @$name?") },
+            text = { Text("С баланса будет списано $price Gold. Имя станет вашим дополнительным @именем.") },
+            confirmButton = { TextButton(onClick = { confirm = null; buy(name, lot) }) { Text("Купить") } },
+            dismissButton = { TextButton(onClick = { confirm = null }) { Text("Отмена") } },
         )
     }
 }

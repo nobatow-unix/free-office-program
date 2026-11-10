@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -122,16 +123,6 @@ fun MyProfileTab(
             ) { Icon(Icons.Filled.Settings, "Настройки") }
         }
 
-        // ---- three buttons like Telegram ----
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            BigButton(Icons.Filled.Verified, "Premium", Modifier.weight(1f)) { onOpen("premium") }
-            BigButton(Icons.Filled.Person, "Аккаунт", Modifier.weight(1f)) { onOpen("account") }
-            BigButton(Icons.Filled.Edit, "Изменить", Modifier.weight(1f)) { onOpen("edit") }
-        }
-
         // ---- info card ----
         Card(
             Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
@@ -150,16 +141,38 @@ fun MyProfileTab(
             }
             s.username?.takeIf { it.isNotBlank() }?.let {
                 Box(Modifier.usernameCopy(it, com.icqnew.app.presentation.IcqLinks.user(it))) {
-                    InfoRow("@$it", "Имя пользователя · удерживайте — ссылка")
+                    InfoRow("@$it", "Имя пользователя")
                 }
             }
-            profile?.usernames?.forEach { u ->
-                Box(Modifier.usernameCopy(u, com.icqnew.app.presentation.IcqLinks.user(u))) {
-                    InfoRow("@$u", "Дополнительное имя")
+            // the other (bought) @names right under the main one, like Telegram: «также @a, @b»
+            profile?.usernames?.takeIf { it.isNotEmpty() }?.let { extra ->
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 0.dp, bottom = 6.dp)
+                        .horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("также ", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    extra.forEachIndexed { i, u ->
+                        Text(
+                            "@$u" + if (i < extra.lastIndex) ", " else "", fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.usernameCopy(u, com.icqnew.app.presentation.IcqLinks.user(u)),
+                        )
+                    }
                 }
             }
             s.about.takeIf { it.isNotBlank() }?.let { InfoRow(it, "О себе") }
             profile?.birthday?.takeIf { it.isNotBlank() }?.let { InfoRow("🎂 " + it, "День рождения") }
+        }
+
+        // ---- three buttons like Telegram ----
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            BigButton(Icons.Filled.Verified, "Premium", Modifier.weight(1f)) { onOpen("premium") }
+            BigButton(Icons.Filled.Person, "Аккаунт", Modifier.weight(1f)) { onOpen("account") }
+            BigButton(Icons.Filled.Edit, "Изменить", Modifier.weight(1f)) { onOpen("edit") }
         }
 
         // ---- Публикации | Подарки ----
@@ -187,7 +200,9 @@ fun MyProfileTab(
     }
 
     if (editing) {
-        val channels = chats.orEmpty().filter { it.peer.isChannel }.map { it.peer }
+        val premiumInfo by vm.premium.collectAsStateWithLifecycle()
+        val ownedIds = premiumInfo?.myGroups.orEmpty().filter { it.owner && it.kind == "channel" }.map { -it.id }.toSet()
+        val channels = chats.orEmpty().filter { it.peer.isChannel && it.peer.uin in ownedIds }.map { it.peer }
         EditProfileDialog(
             name = s.name, about = s.about, birthday = profile?.birthday.orEmpty(), color = profile?.color ?: 0,
             channelId = profile?.channelId ?: 0L, channels = channels,

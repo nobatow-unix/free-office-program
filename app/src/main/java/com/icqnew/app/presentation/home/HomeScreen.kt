@@ -316,8 +316,8 @@ fun HomeScreen(
 
     // while the main screen is shown, «Вернуться к звонку» and the playing voice sit right under «ICQ»
     DisposableEffect(Unit) {
-        container.homeOnScreen.value = true
-        onDispose { container.homeOnScreen.value = false }
+        container.homeOnScreen.value += 1
+        onDispose { container.homeOnScreen.value -= 1 }
     }
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
@@ -456,10 +456,14 @@ fun HomeScreen(
             // classic bar, without its own dark background; the open section is lit in colour
             // a little lower and slightly see-through: the chat list scrolls under it
             val navInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+            // no edge line: the background fades from fully clear (top) into the screen colour (bottom)
+            val bg = MaterialTheme.colorScheme.background
             NavigationBar(
-                containerColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.86f),
+                containerColor = Color.Transparent,
                 tonalElevation = 0.dp,
-                modifier = Modifier.height(62.dp + navInset),
+                modifier = Modifier.height(62.dp + navInset).background(
+                    Brush.verticalGradient(0f to bg.copy(alpha = 0f), 0.35f to bg.copy(alpha = 0.72f), 1f to bg.copy(alpha = 0.94f)),
+                ),
             ) {
                 TABS.forEachIndexed { i, t ->
                     val badge = when (i) {
@@ -635,7 +639,11 @@ fun HomeScreen(
                             }, onLoggedOut = onLoggedOut)
                         }
                         "edit" -> SubPage("Изменить", onBack = { profilePage = null }) {
-                            EditAccountPage(vm, onPickAvatar = { avatarPicker.launch("image/*") }, onDone = { profilePage = null })
+                            EditAccountPage(vm, onPickAvatar = { avatarPicker.launch("image/*") }, onDone = { profilePage = null },
+                                onFragment = { profilePage = "fragment" })
+                        }
+                        "fragment" -> SubPage("Fragment", onBack = { profilePage = "edit" }) {
+                            FragmentPage(vm)
                         }
                         "contacts" -> SubPage("Контакты", onBack = { profilePage = null }, actions = {
                             IconButton(onClick = onSearch) { Icon(Icons.Filled.Search, "Поиск") }
@@ -952,7 +960,11 @@ private fun ChatListItem(
             }
             Spacer(Modifier.height(2.dp))
             if (typing && !chat.peer.isChannel) {
-                TypingLabel("печатает", MaterialTheme.colorScheme.primary, 15.sp)
+                val act = if (chat.peer.isGroup) "" else LocalContext.current.appContainer().chatRepository.typingAction(chat.peer.uin)
+                TypingLabel(
+                    when (act) { "voice" -> "записывает голосовое"; "video" -> "записывает видео"; else -> "печатает" },
+                    MaterialTheme.colorScheme.primary, 15.sp,
+                )
             } else {
                 val prefix = when {
                     chat.lastFromMe && !chat.peer.isChannel && !chat.peer.isSelf -> "Вы: "

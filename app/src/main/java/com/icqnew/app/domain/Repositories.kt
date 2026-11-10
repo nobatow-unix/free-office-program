@@ -199,6 +199,11 @@ interface ChatRepository {
     suspend fun addUsername(name: String): Pair<List<String>, Int>
     suspend fun removeUsername(name: String): Pair<List<String>, Int>
     suspend fun setPassword(password: String, old: String?)
+    suspend fun fragment(): com.icqnew.app.data.remote.FragmentDto
+    suspend fun fragmentBuy(name: String)
+    /** what [uin] is doing right now: "" typing, "voice" / "video" recording */
+    fun typingAction(uin: Long): String
+    fun notifyRecording(peer: Long, action: String)
     suspend fun markStorySeen(id: Long)
     suspend fun storyViewers(id: Long): List<User>
     suspend fun deleteStory(id: Long)

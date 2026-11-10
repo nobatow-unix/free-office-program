@@ -248,7 +248,7 @@ fun EmojiText(
         overflow = overflow,
         textAlign = textAlign,
         inlineContent = inline,
-        style = style,
+        style = remember(text, style) { com.icqnew.app.presentation.theme.fontFor(text)?.let { style.copy(fontFamily = it) } ?: style },
         onTextLayout = onTextLayout,
     )
 }

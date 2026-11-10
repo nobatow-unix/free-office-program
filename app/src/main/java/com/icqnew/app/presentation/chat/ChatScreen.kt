@@ -451,11 +451,25 @@ fun ChatScreen(
         if (needed.isEmpty()) startCall(video) else callPermissions.launch(needed.toTypedArray())
     }
 
+    run {
+        val host = LocalContext.current.appContainer()
+        DisposableEffect(Unit) {
+            host.homeOnScreen.value += 1
+            onDispose { host.homeOnScreen.value -= 1 }
+        }
+    }
     val title = peer?.name ?: group?.name ?: if (isGroup) "Группа" else "ID $uin"
     val typingNames = typing.map { t -> members[t]?.name?.substringBefore(' ') ?: "Кто-то" }
+    // recording a voice / round video instead of typing (like Telegram)
+    val doing = typing.firstOrNull()?.let { vm.typingAction(it) }.orEmpty()
+    val doingText = when (doing) {
+        "voice" -> "записывает голосовое"
+        "video" -> "записывает видео"
+        else -> "печатает"
+    }
     val typingText = when (typingNames.size) {
         0 -> ""
-        1 -> "${typingNames[0]} печатает"
+        1 -> "${typingNames[0]} $doingText"
         2 -> "${typingNames[0]} и ${typingNames[1]} печатают"
         else -> "${typingNames[0]}, ${typingNames[1]} и ещё ${typingNames.size - 2} печатают"
     }
@@ -466,7 +480,7 @@ fun ChatScreen(
         isSaved -> "ваши заметки и файлы"
         isBotChat && typing.isEmpty() -> "бот"
         typing.isNotEmpty() && isGroup && !isChannel -> typingText
-        typing.isNotEmpty() && !isGroup -> "печатает"
+        typing.isNotEmpty() && !isGroup -> doingText
         isChannel -> "канал · " + subscribers(group?.count ?: peer?.membersCount ?: 0)
         isGroup -> membersText(group?.count?.takeIf { it > 0 } ?: group?.members?.size ?: peer?.membersCount ?: 0)
         prefs.blocked -> "заблокирован"
@@ -477,6 +491,7 @@ fun ChatScreen(
 
     Scaffold(
         topBar = {
+          Column {
             TopAppBar(
                 expandedHeight = 54.dp, // compact header (was 64 dp)
                 navigationIcon = {
@@ -515,14 +530,17 @@ fun ChatScreen(
                                     )
                                 }
                             }
-                            if (typing.isNotEmpty() && !isSaved && !isChannel) {
-                                com.icqnew.app.presentation.components.TypingLabel(subtitle, MaterialTheme.colorScheme.primary)
-                            } else if (subtitle.isNotEmpty()) {
-                                Text(
-                                    subtitle, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, lineHeight = 14.sp,
-                                    color = if (highlight && !isSaved) MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+                            // one fixed-height line: the name no longer jumps up and down when «печатает…» appears
+                            if (subtitle.isNotEmpty() || typing.isNotEmpty()) Box(Modifier.height(16.dp), contentAlignment = Alignment.CenterStart) {
+                                if (typing.isNotEmpty() && !isSaved && !isChannel) {
+                                    com.icqnew.app.presentation.components.TypingLabel(subtitle, MaterialTheme.colorScheme.primary)
+                                } else {
+                                    Text(
+                                        subtitle, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, lineHeight = 14.sp,
+                                        color = if (highlight && !isSaved) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
                             }
                         }
                     }
@@ -577,6 +595,11 @@ fun ChatScreen(
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
             )
+            // «Вернуться к звонку» and the playing voice: right under the chat header
+            com.icqnew.app.presentation.components.AppTopBars(
+                container.callManager, container.voicePlayer, inline = true,
+            ) { p -> if (p != uin) container.openChatRequest.value = p }
+          }
         },
         containerColor = chatBackground(),
         // max(navigation bar, keyboard) at the bottom — not both added together (that left an empty strip).
@@ -1033,6 +1056,12 @@ fun ChatScreen(
             },
         )
     }
+    LaunchedEffect(recordingNote) {
+        while (recordingNote) {
+            vm.notifyRecording("video")
+            delay(2_500)
+        }
+    }
     if (recordingNote) {
         VideoNoteRecorder(
             onDismiss = { recordingNote = false },
@@ -1217,13 +1246,29 @@ private fun InputBar(
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                 .focusRequester(focus)
                 .onFocusChanged { if (it.isFocused) onFieldFocused() },
-            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 16.sp, color = onSurface, fontFamily = com.icqnew.app.presentation.theme.Rubik),
+            // fixed line height: the field no longer jumps between the hint, Rubik text and «fancy font» text
+            textStyle = androidx.compose.ui.text.TextStyle(
+                fontSize = 16.sp, lineHeight = 22.sp, color = onSurface,
+                fontFamily = com.icqnew.app.presentation.theme.fontFor(value.text) ?: com.icqnew.app.presentation.theme.Rubik,
+                lineHeightStyle = androidx.compose.ui.text.style.LineHeightStyle(
+                    androidx.compose.ui.text.style.LineHeightStyle.Alignment.Center,
+                    androidx.compose.ui.text.style.LineHeightStyle.Trim.None,
+                ),
+                platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false),
+            ),
             cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
             maxLines = 6,
             decorationBox = { inner ->
                 Box(Modifier.padding(horizontal = 16.dp, vertical = 10.dp), contentAlignment = Alignment.CenterStart) {
                     if (value.text.isEmpty()) {
-                        Text("Сообщение", fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            "Сообщение", fontSize = 16.sp, lineHeight = 22.sp, maxLines = 1,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = androidx.compose.ui.text.TextStyle(
+                                fontFamily = com.icqnew.app.presentation.theme.Rubik,
+                                platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false),
+                            ),
+                        )
                     }
                     inner()
                 }
@@ -1461,7 +1506,19 @@ private fun RecordingBar(levels: List<Float>, onCancel: () -> Unit, onSend: () -
             }
         }
         Spacer(Modifier.width(8.dp))
-        FilledIconButton(onClick = onSend) { Icon(Icons.AutoMirrored.Filled.Send, "Отправить") }
+        // a big pulsing red mic under the finger: clearly shows that the voice is being recorded
+        val pulse by androidx.compose.animation.core.rememberInfiniteTransition(label = "rec").animateFloat(
+            1f, 1.18f,
+            androidx.compose.animation.core.infiniteRepeatable(
+                androidx.compose.animation.core.tween(650), androidx.compose.animation.core.RepeatMode.Reverse,
+            ),
+            label = "recPulse",
+        )
+        Box(
+            Modifier.size(52.dp).graphicsLayer { scaleX = pulse; scaleY = pulse }.clip(CircleShape)
+                .background(Color(0xFFFF3B30)).clickable(onClick = onSend),
+            contentAlignment = Alignment.Center,
+        ) { Icon(Icons.Filled.Mic, "Отправить", tint = Color.White, modifier = Modifier.size(26.dp)) }
     }
 }
 

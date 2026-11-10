@@ -211,6 +211,7 @@ fun RichText(
             },
         color = textColor,
         fontSize = fontSize,
+        fontFamily = remember(text) { com.icqnew.app.presentation.theme.fontFor(text) },
         inlineContent = inline,
         maxLines = maxLines,
         overflow = overflow,

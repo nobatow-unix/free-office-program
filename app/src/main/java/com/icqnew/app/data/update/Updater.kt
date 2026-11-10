@@ -58,7 +58,8 @@ class Updater(private val context: Context, private val api: IcqApi, private val
         val v = _state.value.available ?: return
         if (_state.value.progress != null) return
         scope.launch {
-            _state.value = _state.value.copy(progress = 0f, error = null)
+            // the big banner goes away: only the small circle next to «ICQ» shows the download
+            _state.value = _state.value.copy(progress = 0f, error = null, dismissed = true)
             try {
                 val dir = File(context.cacheDir, "updates").apply { mkdirs() }
                 dir.listFiles()?.forEach { it.delete() }
@@ -81,10 +82,38 @@ class Updater(private val context: Context, private val api: IcqApi, private val
                     api.downloadUpdate(v.url, f) { p -> _state.value = _state.value.copy(progress = p) }
                 }
                 _state.value = _state.value.copy(progress = null)
+                withContext(Dispatchers.IO) { keepCopy(f) }
                 withContext(Dispatchers.Main) { install(f) }
             } catch (e: Exception) {
-                _state.value = _state.value.copy(progress = null, error = "Не удалось скачать обновление")
+                _state.value = _state.value.copy(progress = null, dismissed = false, error = "Не удалось скачать обновление")
             }
+        }
+    }
+
+    /** A copy of the update stays in «Загрузки/ICQ» (the older copy made by the app is replaced). */
+    private fun keepCopy(f: File) {
+        if (Build.VERSION.SDK_INT < 29) return
+        runCatching {
+            val res = context.contentResolver
+            val col = android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI
+            // our own earlier copies (the app can see only the files it made itself)
+            res.query(
+                col, arrayOf(android.provider.MediaStore.MediaColumns._ID),
+                android.provider.MediaStore.MediaColumns.RELATIVE_PATH + " LIKE ? AND " +
+                    android.provider.MediaStore.MediaColumns.DISPLAY_NAME + " LIKE ?",
+                arrayOf("Download/ICQ%", "ICQ-New-%"), null,
+            )?.use { c ->
+                while (c.moveToNext()) {
+                    runCatching { res.delete(android.content.ContentUris.withAppendedId(col, c.getLong(0)), null, null) }
+                }
+            }
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, f.name)
+                put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/vnd.android.package-archive")
+                put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS + "/ICQ")
+            }
+            val uri = res.insert(col, values) ?: return
+            res.openOutputStream(uri)?.use { out -> f.inputStream().use { it.copyTo(out) } }
         }
     }
 
@@ -95,7 +124,7 @@ class Updater(private val context: Context, private val api: IcqApi, private val
                 Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + context.packageName))
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             )
-            _state.value = _state.value.copy(error = "Разрешите установку и нажмите «Обновить» ещё раз")
+            _state.value = _state.value.copy(dismissed = false, error = "Разрешите установку и нажмите «Обновить» ещё раз")
             return
         }
         val uri = FileProvider.getUriForFile(context, context.packageName + ".files", f)

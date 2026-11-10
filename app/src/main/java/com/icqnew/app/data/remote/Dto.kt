@@ -53,7 +53,10 @@ data class PerkDto(val icon: String = "", val title: String, val text: String = 
 data class BalanceLogDto(val delta: Int, val reason: String, val ts: Long)
 
 @Serializable
-data class MyGroupDto(val id: Long, val name: String, val kind: String = "group", @SerialName("premium_until") val premiumUntil: Long = 0)
+data class MyGroupDto(
+    val id: Long, val name: String, val kind: String = "group",
+    @SerialName("premium_until") val premiumUntil: Long = 0, val owner: Boolean = false,
+)
 
 @Serializable
 data class PremiumInfoDto(
@@ -385,7 +388,17 @@ data class StoryDto(
 )
 
 @Serializable
-data class UsernamesDto(val usernames: List<String> = emptyList(), val limit: Int = 2)
+data class UsernamesDto(val usernames: List<String> = emptyList(), val limit: Int = 10, val price: Int = 50)
+
+@Serializable
+data class FragmentLotDto(val username: String, val price: Int)
+
+@Serializable
+data class FragmentDto(
+    val lots: List<FragmentLotDto> = emptyList(),
+    @SerialName("custom_price") val customPrice: Int = 50,
+    val balance: Int = 0,
+)
 
 @Serializable
 data class EmailCodeRequest(val email: String)
@@ -451,6 +464,8 @@ data class WsOut(
     val data: kotlinx.serialization.json.JsonObject? = null,
     val active: Boolean? = null,
     val poll: WsPoll? = null,
+    /** typing: "" = typing, "voice" / "video" = recording */
+    val action: String? = null,
 )
 
 /** Server -> client over WebSocket
@@ -472,6 +487,7 @@ data class WsIn(
     val text: String? = null,
     val from: Long? = null,
     val data: kotlinx.serialization.json.JsonObject? = null,
+    val action: String? = null,
 )
 
 fun UserDto.toDomain() = User(
