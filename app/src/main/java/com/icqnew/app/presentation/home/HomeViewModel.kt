@@ -150,6 +150,14 @@ class HomeViewModel(
         viewModelScope.launch { settings.setSwipeAction(v) }
     }
 
+    fun setFolders(list: List<com.icqnew.app.domain.ChatFolder>) {
+        viewModelScope.launch { settings.setFolders(list) }
+    }
+
+    fun setLanguage(code: String) {
+        viewModelScope.launch { settings.setLanguage(code) }
+    }
+
     fun setArchived(peer: Long, archived: Boolean) {
         viewModelScope.launch {
             settings.setArchived(peer, archived)
@@ -283,6 +291,71 @@ class HomeViewModel(
         }
     }
 
+    /** «Изменить»: everything of the account in one go (name, surname, about, email, birthday, colour, channel, @name). */
+    fun saveAccount(
+        name: String, surname: String, about: String, email: String, birthday: String, color: Int, channelId: Long,
+        username: String, onDone: () -> Unit,
+    ) {
+        if (name.isBlank()) { _message.value = "Введите имя"; return }
+        viewModelScope.launch {
+            try {
+                val un = username.trim().removePrefix("@")
+                if (un != session.value?.username.orEmpty()) auth.setUsername(un)
+                auth.updateProfile(name.trim(), about.trim())
+                _myProfile.value = chatRepo.updateProfileExtra(name.trim(), birthday.trim(), channelId, color, surname.trim(), email.trim())
+                _message.value = "Профиль сохранён"
+                onDone()
+            } catch (e: Exception) {
+                _message.value = e.userMessage()
+            }
+        }
+    }
+
+    // ---- Premium ----
+    private val _premium = MutableStateFlow<com.icqnew.app.data.remote.PremiumInfoDto?>(null)
+    val premium: StateFlow<com.icqnew.app.data.remote.PremiumInfoDto?> = _premium.asStateFlow()
+
+    fun loadPremium() {
+        viewModelScope.launch { runCatching { chatRepo.premiumInfo() }.onSuccess { _premium.value = it }.onFailure { _message.value = it.userMessage() } }
+    }
+
+    fun buyPremium(months: Int, group: Long? = null, to: Long? = null) {
+        viewModelScope.launch {
+            try {
+                chatRepo.buyPremium(months, group, to)
+                _message.value = when {
+                    group != null -> "Premium для чата подключён ⭐"
+                    to != null -> "Premium подарен 🎁"
+                    else -> "ICQ Premium подключён ⭐"
+                }
+                loadPremium()
+                session.value?.uin?.let { loadMyProfile(it) }
+            } catch (e: Exception) {
+                _message.value = e.userMessage()
+            }
+        }
+    }
+
+    fun sendGift(to: Long, gift: String, text: String, anonymous: Boolean) {
+        viewModelScope.launch {
+            try {
+                chatRepo.sendGift(to, gift, text, anonymous)
+                _message.value = "Подарок отправлен 🎁"
+                loadPremium()
+                session.value?.uin?.let { if (it == to) loadGifts(it) }
+            } catch (e: Exception) {
+                _message.value = e.userMessage()
+            }
+        }
+    }
+
+    private val _gifts = MutableStateFlow<List<com.icqnew.app.data.remote.UserGiftDto>>(emptyList())
+    val gifts: StateFlow<List<com.icqnew.app.data.remote.UserGiftDto>> = _gifts.asStateFlow()
+
+    fun loadGifts(uin: Long) {
+        viewModelScope.launch { runCatching { chatRepo.userGifts(uin) }.onSuccess { _gifts.value = it } }
+    }
+
     fun saveProfile(name: String, about: String, birthday: String, color: Int, channelId: Long) {
         if (name.isBlank()) return
         viewModelScope.launch {
@@ -320,6 +393,15 @@ class HomeViewModel(
     }
 
     fun setPinned(peer: Long, v: Boolean) {
+        if (v) {
+            // 5 pinned chats, 10 with ICQ Premium
+            val limit = if (_myProfile.value?.premium == true) 10 else 5
+            val pinned = chats.value.orEmpty().count { it.pinned && it.peer.uin != peer }
+            if (pinned >= limit) {
+                _message.value = if (limit == 5) "Закрепить больше 5 чатов можно с ICQ Premium ⭐" else "Максимум 10 закреплённых чатов"
+                return
+            }
+        }
         viewModelScope.launch { chatRepo.setPinned(peer, v) }
     }
 

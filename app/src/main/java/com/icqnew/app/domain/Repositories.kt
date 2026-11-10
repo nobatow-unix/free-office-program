@@ -37,6 +37,8 @@ interface SettingsRepository {
     suspend fun setSoundChoice(v: String)
     suspend fun setSwipeAction(v: String)
     suspend fun setArchived(peer: Long, archived: Boolean)
+    suspend fun setFolders(list: List<ChatFolder>)
+    suspend fun setLanguage(code: String)
     /** Saves local options and pushes the server-side ones (searchable / show online). */
     suspend fun setPrivacy(p: PrivacySettings)
 }
@@ -106,7 +108,7 @@ interface ChatRepository {
     suspend fun deleteStoryComment(id: Long, commentId: Long)
 
     /** Birthday ("DD.MM[.YYYY]", "" clears), my channel (0 clears), profile colour. Null = unchanged. */
-    suspend fun updateProfileExtra(name: String, birthday: String?, channelId: Long?, color: Int?): User
+    suspend fun updateProfileExtra(name: String, birthday: String?, channelId: Long?, color: Int?, surname: String? = null, email: String? = null): User
     /** Auto-delete timer of a chat in seconds (0 = off). */
     suspend fun chatTtl(peer: Long): Int
     suspend fun setChatTtl(peer: Long, seconds: Int)
@@ -158,6 +160,13 @@ interface ChatRepository {
     /** Auto-delete for all my chats (seconds, 0 = off; 2 days by default). */
     /** Answer to a publication: a private message to its author with the publication quoted. */
     suspend fun replyStory(storyId: Long, text: String)
+    /** I listened to this voice message / round video. */
+    suspend fun markPlayed(localId: Long)
+    // ---- Premium ----
+    suspend fun premiumInfo(): com.icqnew.app.data.remote.PremiumInfoDto
+    suspend fun buyPremium(months: Int, group: Long? = null, to: Long? = null): Int
+    suspend fun sendGift(to: Long, gift: String, text: String, anonymous: Boolean): Int
+    suspend fun userGifts(uin: Long): List<com.icqnew.app.data.remote.UserGiftDto>
     suspend fun defaultTtl(): Int
     suspend fun setDefaultTtl(seconds: Int): Int
     /** Latest posts of an open channel (preview before subscribing). */

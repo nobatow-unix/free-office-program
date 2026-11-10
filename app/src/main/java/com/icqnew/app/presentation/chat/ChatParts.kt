@@ -18,6 +18,11 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.foundation.Canvas
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
@@ -112,6 +117,7 @@ fun shortPreview(m: ChatMessage): String = when {
     m.kind == MessageKind.VOICE -> "🎤 Голосовое сообщение"
     m.kind == MessageKind.VIDEO_NOTE -> "⏺ Видеосообщение"
     m.kind == MessageKind.POLL -> "📊 " + m.text
+    m.kind == MessageKind.GIFT -> "🎁 Подарок"
     m.kind == MessageKind.STICKER -> m.text + " Стикер"
     else -> com.icqnew.app.presentation.emoji.RichFormat.plain(m.text)
 }
@@ -181,6 +187,8 @@ fun MessageRow(
     onVote: ((List<Int>) -> Unit)? = null,
     /** channel post: centred, wide, same look for everybody (views + time at the bottom) */
     channelPost: Boolean = false,
+    /** round video watched with sound */
+    onPlayed: () -> Unit = {},
 ) {
     val mine = m.fromMe
     val bigEmoji = remember(m.text, m.kind, m.deleted) {
@@ -283,7 +291,7 @@ fun MessageRow(
                 } else if (m.kind == MessageKind.VIDEO_NOTE && !m.deleted && videoSource != null) {
                     Column(horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
                         if (showSender && firstOfGroup) SenderName(sender?.name, m.fromUin, sender?.verified == true, onSenderClick)
-                        VideoNote(m, videoSource, onOpen = onFile, onLongPress = onLongPress)
+                        VideoNote(m, videoSource, onOpen = onFile, onLongPress = onLongPress, onPlayed = onPlayed)
                         Box(
                             Modifier.padding(top = 2.dp).clip(RoundedCornerShape(10.dp))
                                 .background(Color.Black.copy(alpha = 0.35f)).padding(horizontal = 6.dp, vertical = 1.dp),
@@ -610,6 +618,17 @@ private fun Bubble(
                                 if (playing) durationText(voice.positionMs.toLong()) + " / " + durationText(total) else durationText(total),
                                 color = fg.copy(alpha = 0.8f), fontSize = 12.sp,
                             )
+                            // not listened yet: a dot, like Telegram (for the sender: the recipient has not listened)
+                            androidx.compose.animation.AnimatedVisibility(
+                                visible = !m.played && !playing,
+                                enter = androidx.compose.animation.scaleIn() + androidx.compose.animation.fadeIn(),
+                                exit = androidx.compose.animation.scaleOut() + androidx.compose.animation.fadeOut(),
+                            ) {
+                                Box(
+                                    Modifier.padding(start = 5.dp).size(7.dp).clip(CircleShape)
+                                        .background(if (mine) Color.White else primary),
+                                )
+                            }
                             if (playing) {
                                 Spacer(Modifier.width(6.dp))
                                 Box(
@@ -626,6 +645,31 @@ private fun Bubble(
                             if (!post) Meta(m, metaColor)
                         }
                     }
+                }
+            }
+            MessageKind.GIFT -> {
+                // a gift: big picture, its name and the wish
+                val g = com.icqnew.app.domain.GiftCatalog.byId(m.attName)
+                Column(
+                    Modifier.width(220.dp).padding(vertical = 6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    val pulse = rememberInfiniteTransition(label = "gift")
+                    val sc by pulse.animateFloat(
+                        0.94f, 1.06f, infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "gs",
+                    )
+                    Box(Modifier.graphicsLayer { scaleX = sc; scaleY = sc }) { EmojiImage(g?.first ?: "🎁", 72.dp) }
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        if (mine) "Вы подарили: ${g?.second ?: "подарок"}" else "Вам подарок: ${g?.second ?: "подарок"}",
+                        color = fg, fontWeight = FontWeight.Bold, fontSize = 15.sp,
+                    )
+                    if (m.text.isNotBlank()) {
+                        Spacer(Modifier.height(4.dp))
+                        com.icqnew.app.presentation.emoji.RichText(m.text, color = fg.copy(alpha = 0.9f), fontSize = 14.sp)
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Box(Modifier.align(Alignment.End)) { Meta(m, metaColor) }
                 }
             }
             MessageKind.POLL -> {
@@ -1250,7 +1294,13 @@ fun LinkPreviewCard(url: String, mine: Boolean, load: suspend (String) -> com.ic
 
 /** Round video message: plays muted in a loop inside the circle, tap = full screen with sound. */
 @Composable
-fun VideoNote(m: ChatMessage, source: suspend () -> Pair<String, Map<String, String>>?, onOpen: () -> Unit, onLongPress: () -> Unit) {
+fun VideoNote(
+    m: ChatMessage,
+    source: suspend () -> Pair<String, Map<String, String>>?,
+    onOpen: () -> Unit,
+    onLongPress: () -> Unit,
+    onPlayed: () -> Unit = {},
+) {
     // Round video message like Telegram: fills the circle (centre crop), loops silently;
     // a tap plays it from the start WITH sound and a progress ring, another tap mutes it again.
     // TextureView (not VideoView/SurfaceView) so it is really clipped to a circle and scrolls smoothly.
@@ -1297,7 +1347,9 @@ fun VideoNote(m: ChatMessage, source: suspend () -> Pair<String, Map<String, Str
             Modifier.size(200.dp).clip(CircleShape).background(Color(0xFF1B1F24))
                 .pointerInput(m.id) {
                     detectTapGestures(
-                        onTap = { if (ready) sound = !sound else if (failed) onOpen() },
+                        onTap = {
+                            if (ready) { sound = !sound; if (sound) onPlayed() } else if (failed) onOpen()
+                        },
                         onLongPress = { onLongPress() },
                     )
                 },
@@ -1368,6 +1420,10 @@ fun VideoNote(m: ChatMessage, source: suspend () -> Pair<String, Map<String, Str
             )
             Spacer(Modifier.width(4.dp))
             Text(durationText(m.attDurMs), color = Color.White, fontSize = 12.sp)
+            if (!m.played) {
+                Spacer(Modifier.width(5.dp))
+                Box(Modifier.size(6.dp).clip(CircleShape).background(primary))
+            }
         }
     }
 }

@@ -86,6 +86,19 @@ class CallManager(
     private val _state = MutableStateFlow<CallUi?>(null)
     val state: StateFlow<CallUi?> = _state.asStateFlow()
 
+    /** The call screen is folded into a bar at the top: chats can be used during the call. */
+    private val _minimized = MutableStateFlow(false)
+    val minimized: StateFlow<Boolean> = _minimized.asStateFlow()
+
+    fun minimize() {
+        val s = _state.value ?: return
+        if (s.phase != CallPhase.INCOMING && s.phase != CallPhase.ENDED) _minimized.value = true
+    }
+
+    fun expand() {
+        _minimized.value = false
+    }
+
     val eglBase: EglBase by lazy { EglBase.create() }
 
     private var factory: PeerConnectionFactory? = null
@@ -117,6 +130,7 @@ class CallManager(
     fun startCall(peer: Long, name: String, avatarUrl: String?, video: Boolean) {
         if (_state.value != null) return
         val id = UUID.randomUUID().toString()
+        _minimized.value = false
         _state.value = CallUi(id, peer, name, avatarUrl, video, incoming = false, phase = CallPhase.OUTGOING,
             speaker = video)
         startRingback()
@@ -237,6 +251,7 @@ class CallManager(
                 remoteSet = false
                 val name = ev.user?.name ?: db.contactDao().get(from)?.name ?: "ID $from"
                 val avatar = ev.user?.avatarUrl ?: db.contactDao().get(from)?.avatarUrl
+                _minimized.value = false
                 _state.value = CallUi(callId, from, name, avatar, video, incoming = true, phase = CallPhase.INCOMING)
                 startRinging()
                 if (!AppForeground.isForeground()) notifier.showIncomingCall(name, from, video)

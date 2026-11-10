@@ -10,6 +10,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.lazy.items
@@ -275,9 +277,13 @@ fun HomeScreen(
     val channels = allChats?.filter { it.peer.isChannel }
     val bots = allChats?.filter { it.peer.uin == com.icqnew.app.domain.BOT_UIN }
     fun unreadOf(l: List<ChatPreview>?) = l?.filter { !it.muted }?.sumOf { it.unread } ?: 0
-    val listStates = remember { List(4) { androidx.compose.foundation.lazy.LazyListState() } }
+    // «Личные» opens with the publications row tucked away above the list: pull down to see it (like Telegram)
+    val listStates = remember {
+        List(4) { i -> androidx.compose.foundation.lazy.LazyListState(firstVisibleItemIndex = if (i == 0) 1 else 0) }
+    }
     val fabVisible = if (tab < 4) listStates[tab].isScrollingUp() else false
     var profilePage by rememberSaveable { mutableStateOf<String?>(null) }
+    var folderIndex by rememberSaveable { mutableStateOf(-1) }
     androidx.activity.compose.BackHandler(enabled = profilePage != null) { profilePage = null }
 
     Scaffold(
@@ -300,6 +306,28 @@ fun HomeScreen(
                                         fontSize = 12.sp,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
+                                }
+                            }
+                            // publications folded away: their avatars sit in the title; tap = show the row
+                            val folded by remember { derivedStateOf { listStates[0].firstVisibleItemIndex > 0 } }
+                            val withStories = stories.filter { it.stories.isNotEmpty() }
+                            androidx.compose.animation.AnimatedVisibility(
+                                visible = tab == 0 && folded && withStories.isNotEmpty(),
+                                enter = androidx.compose.animation.scaleIn() + androidx.compose.animation.fadeIn(),
+                                exit = androidx.compose.animation.scaleOut() + androidx.compose.animation.fadeOut(),
+                            ) {
+                                Box(
+                                    Modifier.padding(start = 12.dp).height(30.dp).width((22 + 16 * (withStories.size.coerceAtMost(3) - 1)).dp + 8.dp)
+                                        .clip(RoundedCornerShape(15.dp))
+                                        .clickable { scope.launch { listStates[0].animateScrollToItem(0) } },
+                                ) {
+                                    withStories.take(3).forEachIndexed { i, g ->
+                                        Box(
+                                            Modifier.padding(start = (16 * i).dp, top = 2.dp).size(26.dp).clip(CircleShape)
+                                                .border(2.dp, if (g.allSeen) MaterialTheme.colorScheme.outline else com.icqnew.app.presentation.theme.IcqGreen, CircleShape)
+                                                .padding(2.dp),
+                                        ) { Avatar(g.user.name, g.user.uin, g.user.avatarUrl, false, 22.dp, storyRing = false) }
+                                    }
                                 }
                             }
                         }
@@ -435,8 +463,26 @@ fun HomeScreen(
         ) { shownTab ->
         Box(Modifier.fillMaxSize()) {
             when (shownTab) {
-                0 -> ChatsList(
-                    chats = personal,
+                0 -> Column(Modifier.fillMaxSize()) {
+                  // my chat folders as tabs (Settings → Папки с чатами)
+                  if (app.folders.isNotEmpty()) {
+                    Row(
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        FilterChip(selected = folderIndex < 0, onClick = { folderIndex = -1 }, label = { Text("Все") })
+                        app.folders.forEachIndexed { i, f ->
+                            val unread = unreadOf(allChats?.filter { it.peer.uin in f.peers })
+                            FilterChip(
+                                selected = folderIndex == i, onClick = { folderIndex = i },
+                                label = { Text(f.name + if (unread > 0) " · $unread" else "") },
+                            )
+                        }
+                    }
+                  }
+                  val folder = app.folders.getOrNull(folderIndex)
+                  ChatsList(
+                    chats = if (folder != null) allChats?.filter { it.peer.uin in folder.peers } else personal,
                     emptyTitle = "Пока нет чатов",
                     emptyHint = "Найдите друга по ID, номеру или @имени и напишите ему",
                     emptyButton = "Найти людей",
@@ -457,7 +503,8 @@ fun HomeScreen(
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                         if (archivedChats.isNotEmpty()) ArchiveRow(archivedChats) { showArchive = true }
                     },
-                )
+                  )
+                }
                 1 -> ChatsList(
                     chats = groupChats,
                     emptyTitle = "Нет групп",
@@ -520,6 +567,15 @@ fun HomeScreen(
                                 onOpenProfile = onOpenProfile,
                             )
                         }
+                        "premium" -> SubPage("ICQ Premium", onBack = { profilePage = null }) {
+                            PremiumPage(vm, onOpenChat)
+                        }
+                        "account" -> SubPage("Аккаунт", onBack = { profilePage = null }) {
+                            AccountPage(vm, onOpen = { profilePage = it }, onLoggedOut = onLoggedOut)
+                        }
+                        "edit" -> SubPage("Изменить", onBack = { profilePage = null }) {
+                            EditAccountPage(vm, onPickAvatar = { avatarPicker.launch("image/*") }, onDone = { profilePage = null })
+                        }
                         "contacts" -> SubPage("Контакты", onBack = { profilePage = null }, actions = {
                             IconButton(onClick = onSearch) { Icon(Icons.Filled.Search, "Поиск") }
                         }) {
@@ -531,7 +587,13 @@ fun HomeScreen(
                             onPickAvatar = { avatarPicker.launch("image/*") },
                             onOpenStory = { i -> storyOpen = stories to i },
                             onAddStory = { storyPicker.launch("image/*") },
-                            onOpen = { profilePage = it },
+                            onOpen = { page ->
+                                if (page == "support") {
+                                    // the support chat (the admin's account if set on the server, the ICQ bot otherwise)
+                                    vm.loadPremium()
+                                    onOpenChat(supportPeer(vm.premium.value))
+                                } else profilePage = page
+                            },
                             onOpenChat = onOpenChat,
                             onNewChannel = onNewChannel,
                             onFindChannels = onFindChannels,
@@ -810,6 +872,7 @@ private fun ChatListItem(
                 NameLine(
                     chat.peer.name, verified = chat.peer.verified, fontSize = 17.sp,
                     modifier = Modifier.weight(1f, fill = false), bot = chat.peer.uin == com.icqnew.app.domain.BOT_UIN,
+                    premium = chat.peer.premium,
                 )
                 if (chat.muted) {
                     Spacer(Modifier.width(4.dp))

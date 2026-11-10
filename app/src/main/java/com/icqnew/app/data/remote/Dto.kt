@@ -30,7 +30,58 @@ data class UserDto(
     val color: Int = 0,
     val channel: ChannelRefDto? = null,
     @SerialName("phone_privacy") val phonePrivacy: String = "contacts",
+    val premium: Boolean = false,
+    val surname: String = "",
+    val email: String = "",
+    val balance: Int = 0,
+    @SerialName("premium_until") val premiumUntil: Long = 0,
 )
+
+// ---- Premium ----
+@Serializable
+data class PlanDto(val months: Int, val price: Int)
+
+@Serializable
+data class GiftDto(val id: String, val emoji: String, val name: String, val price: Int = 0)
+
+@Serializable
+data class PerkDto(val icon: String = "", val title: String, val text: String = "")
+
+@Serializable
+data class BalanceLogDto(val delta: Int, val reason: String, val ts: Long)
+
+@Serializable
+data class MyGroupDto(val id: Long, val name: String, val kind: String = "group", @SerialName("premium_until") val premiumUntil: Long = 0)
+
+@Serializable
+data class PremiumInfoDto(
+    val balance: Int = 0,
+    @SerialName("premium_until") val premiumUntil: Long = 0,
+    val currency: String = "TMT",
+    val plans: List<PlanDto> = emptyList(),
+    @SerialName("group_plans") val groupPlans: List<PlanDto> = emptyList(),
+    val gifts: List<GiftDto> = emptyList(),
+    val perks: List<PerkDto> = emptyList(),
+    val history: List<BalanceLogDto> = emptyList(),
+    @SerialName("my_groups") val myGroups: List<MyGroupDto> = emptyList(),
+    @SerialName("top_up") val topUp: String = "",
+    @SerialName("support_uin") val supportUin: Long = 0,
+)
+
+@Serializable
+data class BuyPremiumRequest(val months: Int, val group: Long? = null, val to: Long? = null)
+
+@Serializable
+data class BuyResultDto(val balance: Int = 0, val until: Long = 0)
+
+@Serializable
+data class SendGiftRequest(val to: Long, val gift: String, val text: String = "", val anonymous: Boolean = false)
+
+@Serializable
+data class GiftResultDto(val balance: Int = 0)
+
+@Serializable
+data class UserGiftDto(val gift: GiftDto, val text: String = "", val ts: Long = 0, val from: UserDto? = null)
 
 @Serializable
 data class GroupDto(
@@ -123,6 +174,8 @@ data class ProfileRequest(
     val birthday: String? = null,
     @SerialName("channel_id") val channelId: Long? = null,
     val color: Int? = null,
+    val surname: String? = null,
+    val email: String? = null,
 )
 
 @Serializable
@@ -244,6 +297,8 @@ data class MessageDto(
     val poll: PollDto? = null,
     /** answer to a publication (story) */
     val story: StoryRefDto? = null,
+    /** voice / round video listened to by the recipient */
+    val played: Boolean = false,
 )
 
 @Serializable
@@ -393,5 +448,6 @@ data class WsIn(
 fun UserDto.toDomain() = User(
     uin, name, avatarUrl, online, lastSeen, about, username = username, verified = verified,
     birthday = birthday, color = color, channelId = channel?.id ?: 0, channelName = channel?.name.orEmpty(),
-    channelAvatar = channel?.avatarUrl,
+    channelAvatar = channel?.avatarUrl, premium = premium, surname = surname, email = email,
+    balance = balance, premiumUntil = premiumUntil,
 )

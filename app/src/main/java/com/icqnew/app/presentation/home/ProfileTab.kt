@@ -18,6 +18,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.SupportAgent
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Cake
@@ -80,7 +83,7 @@ fun MyProfileTab(
     val profile by vm.myProfile.collectAsStateWithLifecycle()
     val chats by vm.chats.collectAsStateWithLifecycle()
     val s = session ?: return
-    LaunchedEffect(s.uin) { vm.loadMyProfile(s.uin) }
+    LaunchedEffect(s.uin) { vm.loadMyProfile(s.uin); vm.loadPremium() }
     var editing by remember { mutableStateOf(false) }
     var serverUrl by remember { mutableStateOf("") }
     LaunchedEffect(Unit) { serverUrl = runCatching { context.appContainer().store.snapshot().serverUrl }.getOrDefault("") }
@@ -120,11 +123,20 @@ fun MyProfileTab(
                     contentAlignment = Alignment.Center,
                 ) { Avatar(s.name, s.uin, s.avatarUrl, false, 90.dp, storyRing = false) }
                 Spacer(Modifier.height(8.dp))
-                NameLine(s.name, verified = s.verified, fontSize = 22.sp)
+                NameLine(
+                    listOfNotNull(s.name, profile?.surname?.ifBlank { null }).joinToString(" "),
+                    verified = s.verified, fontSize = 22.sp, premium = profile?.premium == true,
+                )
                 Text(
-                    "в сети", color = MaterialTheme.colorScheme.primary, fontSize = 14.sp,
+                    if (profile?.premium == true) "ICQ Premium ⭐" else "в сети",
+                    color = if (profile?.premium == true) Color(0xFFFFB300) else MaterialTheme.colorScheme.primary, fontSize = 14.sp,
                 )
             }
+            // settings: top right
+            IconButton(
+                onClick = { onOpen("settings") },
+                modifier = Modifier.align(Alignment.TopEnd).padding(end = 6.dp),
+            ) { Icon(Icons.Filled.Settings, "Настройки") }
         }
 
         // ---- three buttons like Telegram ----
@@ -132,9 +144,9 @@ fun MyProfileTab(
             Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            BigButton(Icons.Filled.CameraAlt, "Выбрать фото", Modifier.weight(1f), onPickAvatar)
-            BigButton(Icons.Filled.Edit, "Изменить", Modifier.weight(1f)) { editing = true }
-            BigButton(Icons.Filled.Settings, "Настройки", Modifier.weight(1f)) { onOpen("settings") }
+            BigButton(Icons.Filled.Star, "Premium", Modifier.weight(1f)) { onOpen("premium") }
+            BigButton(Icons.Filled.Person, "Аккаунт", Modifier.weight(1f)) { onOpen("account") }
+            BigButton(Icons.Filled.Edit, "Изменить", Modifier.weight(1f)) { onOpen("edit") }
         }
 
         // ---- info card ----
@@ -159,6 +171,22 @@ fun MyProfileTab(
                 }
             }
             s.about.takeIf { it.isNotBlank() }?.let { InfoRow(it, "О себе") }
+            // gifts I received
+            val gifts by vm.gifts.collectAsStateWithLifecycle()
+            LaunchedEffect(s.uin) { vm.loadGifts(s.uin) }
+            if (gifts.isNotEmpty()) {
+                Row(
+                    Modifier.fillMaxWidth().clickable { onOpen("premium") }.padding(horizontal = 18.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                            gifts.take(8).forEach { g -> com.icqnew.app.presentation.emoji.EmojiImage(g.gift.emoji, 26.dp) }
+                        }
+                        Text("Подарки: ${gifts.size}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
             profile?.birthday?.takeIf { it.isNotBlank() }?.let { InfoRow("🎂 " + it, "День рождения") }
         }
 
@@ -218,6 +246,7 @@ fun MyProfileTab(
                     )
                 context.startActivity(Intent.createChooser(send, "Пригласить"))
             }
+            MenuRow(Icons.Filled.SupportAgent, "Поддержка", Color(0xFF2F8CFF)) { onOpen("support") }
         }
         Spacer(Modifier.height(90.dp))
     }

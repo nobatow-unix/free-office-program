@@ -29,6 +29,8 @@ data class ContactEntity(
     val isPublic: Boolean = false,
     val username: String? = null,
     val verified: Boolean = false,
+    /** ICQ Premium (⭐ next to the name) */
+    val premium: Boolean = false,
     /** group / channel options as JSON (GroupSettingsDto) */
     val settings: String = "",
     val botName: String = "",
@@ -135,6 +137,8 @@ data class MessageEntity(
     val poll: String? = null,
     /** picture of the publication this message answers ("" = answer without picture) */
     val storyAtt: String? = null,
+    /** voice / round video has been listened to (no blue dot) */
+    val played: Boolean = false,
 )
 
 /** Result row of the chat-list query (peer + last message + unread count + local options). */
@@ -149,6 +153,7 @@ data class ChatRow(
     val kind: String,
     val members: Int,
     val verified: Boolean,
+    val premium: Boolean,
     val lastStatus: Int,
     val lastText: String,
     val lastKind: String,
@@ -267,6 +272,9 @@ interface KvDao {
 
 @Dao
 interface MessageDao {
+    @Query("UPDATE messages SET played = 1 WHERE id = :id")
+    suspend fun setPlayed(id: Long)
+
     @Query("UPDATE messages SET views = :views WHERE serverId = :sid AND views < :views")
     suspend fun setViews(sid: Long, views: Int)
 
@@ -341,7 +349,7 @@ interface MessageDao {
     @Query(
         """
         SELECT c.uin AS uin, c.name AS name, c.avatarUrl AS avatarUrl, c.online AS online,
-               c.lastSeen AS lastSeen, c.about AS about, c.isGroup AS isGroup, c.kind AS kind, c.members AS members, c.verified AS verified, COALESCE(m.status, 1) AS lastStatus,
+               c.lastSeen AS lastSeen, c.about AS about, c.isGroup AS isGroup, c.kind AS kind, c.members AS members, c.verified AS verified, c.premium AS premium, COALESCE(m.status, 1) AS lastStatus,
                COALESCE(m.text, '') AS lastText, COALESCE(m.kind, 'system') AS lastKind, COALESCE(m.ts, 0) AS lastTs,
                COALESCE(m.fromMe, 0) AS lastFromMe, COALESCE(m.deleted, 0) AS lastDeleted, m.attName AS lastAttName,
                (SELECT g.name FROM members g WHERE g.gid = -c.uin AND g.uin = m.fromUin) AS lastSender,
@@ -364,7 +372,7 @@ interface MessageDao {
         ContactEntity::class, MessageEntity::class, MemberEntity::class, ChatPrefEntity::class, KvEntity::class,
         CallEntity::class,
     ],
-    version = 9,
+    version = 11,
     exportSchema = false,
 )
 abstract class IcqDatabase : RoomDatabase() {
@@ -378,6 +386,19 @@ abstract class IcqDatabase : RoomDatabase() {
 
 
 /** 6 -> 7: members got @username (for @mentions). Keeps all messages on the phone. */
+val MIGRATION_10_11 = object : androidx.room.migration.Migration(10, 11) {
+    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE contacts ADD COLUMN premium INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+val MIGRATION_9_10 = object : androidx.room.migration.Migration(9, 10) {
+    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        // older voice messages count as listened (no dots on everything after the update)
+        db.execSQL("ALTER TABLE messages ADD COLUMN played INTEGER NOT NULL DEFAULT 1")
+    }
+}
+
 val MIGRATION_8_9 = object : androidx.room.migration.Migration(8, 9) {
     override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE messages ADD COLUMN storyAtt TEXT")

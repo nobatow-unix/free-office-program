@@ -43,8 +43,9 @@ class IcqApi(private val client: HttpClient, private val store: SessionStore) {
 
     suspend fun updateProfile(name: String, about: String?): UserDto = post("/api/me", ProfileRequest(name, about))
 
-    suspend fun updateProfileExtra(name: String, birthday: String?, channelId: Long?, color: Int?): UserDto =
-        post("/api/me", ProfileRequest(name, null, birthday, channelId, color))
+    suspend fun updateProfileExtra(
+        name: String, birthday: String?, channelId: Long?, color: Int?, surname: String? = null, email: String? = null,
+    ): UserDto = post("/api/me", ProfileRequest(name, null, birthday, channelId, color, surname, email))
 
     suspend fun getTtl(to: Long?, group: Long?): TtlDto =
         get("/api/chats/ttl", buildMap { to?.let { put("to", it.toString()) }; group?.let { put("group", it.toString()) } })
@@ -52,6 +53,14 @@ class IcqApi(private val client: HttpClient, private val store: SessionStore) {
     suspend fun setTtl(to: Long?, group: Long?, seconds: Int): TtlDto = post("/api/chats/ttl", TtlRequest(to, group, seconds))
 
     suspend fun defaultTtl(): TtlDto = get("/api/me/ttl")
+
+    suspend fun premium(): PremiumInfoDto = get("/api/premium")
+
+    suspend fun buyPremium(r: BuyPremiumRequest): BuyResultDto = post("/api/premium/buy", r)
+
+    suspend fun sendGift(r: SendGiftRequest): GiftResultDto = post("/api/gifts/send", r)
+
+    suspend fun userGifts(uin: Long): List<UserGiftDto> = get("/api/users/$uin/gifts")
 
     suspend fun setDefaultTtl(seconds: Int): TtlDto = post("/api/me/ttl", DefaultTtlRequest(seconds))
 

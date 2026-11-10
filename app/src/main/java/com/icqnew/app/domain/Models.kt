@@ -31,6 +31,13 @@ data class User(
     val channelAvatar: String? = null,
     /** "Saved messages" — the chat with yourself */
     val isSelf: Boolean = false,
+    /** ICQ Premium: ⭐ next to the name, coloured name, more features */
+    val premium: Boolean = false,
+    val surname: String = "",
+    val email: String = "",
+    /** my own profile only */
+    val balance: Int = 0,
+    val premiumUntil: Long = 0,
 ) {
     val isAdmin: Boolean get() = role == "owner" || role == "admin"
     fun isMutedNow(): Boolean = mutedUntil < 0 || mutedUntil > System.currentTimeMillis()
@@ -56,7 +63,7 @@ enum class MessageStatus { SENDING, SENT, READ, FAILED }
 
 enum class MessageKind(val wire: String) {
     TEXT("text"), STICKER("sticker"), IMAGE("image"), FILE("file"), VOICE("voice"), SYSTEM("system"), BOT("bot"),
-    VIDEO_NOTE("video_note"), POLL("poll");
+    VIDEO_NOTE("video_note"), POLL("poll"), GIFT("gift");
 
     val isAttachment: Boolean get() = this == IMAGE || this == FILE || this == VOICE || this == VIDEO_NOTE
 
@@ -96,6 +103,8 @@ data class ChatMessage(
     val storyAtt: String? = null,
     /** I have seen it (incoming messages) */
     val isRead: Boolean = true,
+    /** voice / round video listened to (blue dot until then) */
+    val played: Boolean = true,
 )
 
 data class PollOption(val text: String, val votes: Int)
@@ -256,7 +265,28 @@ data class AppSettings(
     val swipeAction: String = "delete",
     /** archived chats (peer keys) */
     val archived: Set<Long> = emptySet(),
+    /** my chat folders (tabs above the chat list) */
+    val folders: List<ChatFolder> = emptyList(),
+    val language: String = "ru",
 )
+
+/** A chat folder: a name and the chats in it. Free: 2 folders, Premium: 10. */
+data class ChatFolder(val name: String, val peers: Set<Long>) {
+    companion object {
+        const val FREE_LIMIT = 2
+        const val PREMIUM_LIMIT = 10
+
+        fun decode(raw: String): List<ChatFolder> = raw.lines().filter { it.isNotBlank() }.mapNotNull { l ->
+            val parts = l.split('\t')
+            val name = parts.getOrNull(0)?.trim().orEmpty()
+            if (name.isEmpty()) null
+            else ChatFolder(name, parts.getOrNull(1).orEmpty().split(',').mapNotNull { it.trim().toLongOrNull() }.toSet())
+        }
+
+        fun encode(list: List<ChatFolder>): String =
+            list.joinToString("\n") { f -> f.name.replace('\t', ' ').replace('\n', ' ') + "\t" + f.peers.joinToString(",") }
+    }
+}
 
 enum class ThemeMode { SYSTEM, LIGHT, DARK }
 
@@ -303,4 +333,15 @@ data class ContactCard(
     val addedAt: Long,
 ) {
     val mutual: Boolean get() = iAdded && addedMe
+}
+
+/** The gifts of the server (GIFTS in server.py): id → picture + name. */
+object GiftCatalog {
+    private val all = mapOf(
+        "rose" to ("🌹" to "Роза"), "teddy" to ("🧸" to "Мишка"), "cake" to ("🎂" to "Торт"),
+        "heart" to ("💝" to "Сердце"), "gift" to ("🎁" to "Сюрприз"), "star" to ("⭐" to "Звезда"),
+        "diamond" to ("💎" to "Бриллиант"), "crown" to ("👑" to "Корона"), "rocket" to ("🚀" to "Ракета"),
+    )
+
+    fun byId(id: String?): Pair<String, String>? = id?.let { all[it] }
 }

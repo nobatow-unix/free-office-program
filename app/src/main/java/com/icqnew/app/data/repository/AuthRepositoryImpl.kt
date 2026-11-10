@@ -130,8 +130,15 @@ class SettingsRepositoryImpl(
             soundChoice = it.soundChoice,
             swipeAction = it.swipeAction,
             archived = it.archived.mapNotNull { k -> k.toLongOrNull() }.toSet(),
+            folders = com.icqnew.app.domain.ChatFolder.decode(it.folders),
+            language = it.language,
         )
     }
+
+    override suspend fun setFolders(list: List<com.icqnew.app.domain.ChatFolder>) =
+        store.setFolders(com.icqnew.app.domain.ChatFolder.encode(list))
+
+    override suspend fun setLanguage(code: String) = store.setLanguage(code)
 
     override suspend fun setAccent(index: Int) = store.setAccent(index)
     override suspend fun setFontScale(scale: Float) = store.setFontScale(scale)

@@ -68,6 +68,12 @@ APK="app/build/outputs/apk/release/app-release.apk"
 OUT_DIR="$HOME/Загрузки"
 [ -d "$OUT_DIR" ] || OUT_DIR="$HOME"
 cp "$APK" "$OUT_DIR/icq-new.apk"
+# serwer üçin: server/apk/icq-new.apk — VPS-e ýüklänsoň telefonlar diňe tapawudy (patch) ýükleýär
+mkdir -p server/apk
+cp "$APK" server/apk/icq-new.apk
 echo
 echo "TAÝÝAR: $OUT_DIR/icq-new.apk"
+echo "Serwer üçin hem goýuldy: server/apk/icq-new.apk"
+echo "Täzelenme: server bukjasyny VPS-e göçür we 'sudo bash install.sh' işlet —"
+echo "  serwer köne wersiýany saklaýar we telefonlara diňe täze bölegi (patch) iberýär."
 echo "Telefona iber we guruň (ýa-da: $SDK/platform-tools/adb install -r $OUT_DIR/icq-new.apk)"

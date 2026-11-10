@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.CallEnd
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
@@ -53,9 +54,13 @@ import org.webrtc.SurfaceViewRenderer
 @Composable
 fun CallScreen(manager: CallManager) {
     val state by manager.state.collectAsStateWithLifecycle()
+    val minimized by manager.minimized.collectAsStateWithLifecycle()
     val call = state ?: return
+    // folded into the bar on top (CallReturnBar): the chats are usable during the call
+    if (minimized && call.phase != CallPhase.INCOMING && call.phase != CallPhase.ENDED) return
     val context = LocalContext.current
-    BackHandler { /* the call stays on screen until it ends */ }
+    // "back" folds the call instead of hanging up (an incoming call stays until answered / declined)
+    BackHandler { manager.minimize() }
 
     val acceptPermissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { res ->
         val ok = res[Manifest.permission.RECORD_AUDIO] == true ||
@@ -138,6 +143,14 @@ fun CallScreen(manager: CallManager) {
             }
         }
 
+        if (call.phase != CallPhase.INCOMING && call.phase != CallPhase.ENDED) {
+            // fold the call: chats stay usable, a green bar on top brings it back
+            Box(
+                Modifier.align(Alignment.TopStart).statusBarsPadding().padding(12.dp).size(44.dp).clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.14f)).clickable { manager.minimize() },
+                contentAlignment = Alignment.Center,
+            ) { Icon(Icons.Filled.KeyboardArrowDown, "Свернуть", tint = Color.White) }
+        }
         Column(
             Modifier.fillMaxWidth().statusBarsPadding().padding(top = if (showRemoteVideo) 24.dp else 72.dp),
             horizontalAlignment = Alignment.CenterHorizontally,

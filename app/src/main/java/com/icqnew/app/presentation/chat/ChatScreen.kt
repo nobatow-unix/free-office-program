@@ -481,6 +481,7 @@ fun ChatScreen(
                                     title, verified = peer?.verified == true || group?.verified == true,
                                     fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
                                     modifier = Modifier.weight(1f, fill = false), bot = uin == com.icqnew.app.domain.BOT_UIN,
+                                    premium = peer?.premium == true,
                                 )
                                 if (prefs.muted) {
                                     Spacer(Modifier.width(4.dp))
@@ -632,6 +633,7 @@ fun ChatScreen(
                                             videoSource = { vm.streamSource(m) },
                                             onVote = if (m.kind == MessageKind.POLL) ({ opts -> vm.vote(m, opts) }) else null,
                                             channelPost = isChannel && !isBot,
+                                            onPlayed = { vm.markPlayed(m) },
                                         )
                                         }
                                     }

@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package com.icqnew.app
 
 import android.content.Intent
@@ -11,6 +13,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -98,8 +101,28 @@ class MainActivity : ComponentActivity() {
                         LocalServerUrl provides server,
                         com.icqnew.app.presentation.components.LocalStoryRings provides rings,
                     ) {
+                        val callUi by container.callManager.state.collectAsStateWithLifecycle()
+                        val callFolded by container.callManager.minimized.collectAsStateWithLifecycle()
+                        val voiceUi by container.voicePlayer.state.collectAsStateWithLifecycle()
+                        val barsShown = voiceUi.playingId != null ||
+                            (callFolded && callUi != null && callUi?.phase != com.icqnew.app.data.call.CallPhase.ENDED &&
+                                callUi?.phase != com.icqnew.app.data.call.CallPhase.INCOMING)
                         Box(Modifier.fillMaxSize()) {
-                            start?.let { AppNav(it, container.openChatRequest, container.openLinkRequest) }
+                            androidx.compose.foundation.layout.Column(Modifier.fillMaxSize()) {
+                                // «Вернуться к звонку» + mini player of a voice message (they take the status bar)
+                                com.icqnew.app.presentation.components.AppTopBars(
+                                    container.callManager, container.voicePlayer,
+                                ) { peer -> container.openChatRequest.value = peer }
+                                Box(
+                                    Modifier.weight(1f).then(
+                                        if (barsShown) Modifier.consumeWindowInsets(
+                                            androidx.compose.foundation.layout.WindowInsets.statusBars,
+                                        ) else Modifier
+                                    ),
+                                ) {
+                                    start?.let { AppNav(it, container.openChatRequest, container.openLinkRequest) }
+                                }
+                            }
                             CallScreen(container.callManager)
                         }
                     }

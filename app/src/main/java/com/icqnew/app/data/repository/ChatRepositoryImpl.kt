@@ -131,7 +131,7 @@ class ChatRepositoryImpl(
                 peer = User(
                     r.uin, r.name, r.avatarUrl, r.online && r.uin != me, r.lastSeen, r.about,
                     isGroup = r.isGroup, membersCount = r.members, isChannel = r.kind == "channel",
-                    verified = r.verified, isSelf = r.uin == me,
+                    verified = r.verified, isSelf = r.uin == me, premium = r.premium,
                 ),
                 lastKind = MessageKind.fromWire(r.lastKind),
                 lastStatus = when (r.lastStatus) {
@@ -587,8 +587,9 @@ class ChatRepositoryImpl(
 
     override suspend fun detectDialCode(sim: String): String = runCatching { api.geo(sim).dial }.getOrDefault("")
 
-    override suspend fun updateProfileExtra(name: String, birthday: String?, channelId: Long?, color: Int?): User =
-        api.updateProfileExtra(name, birthday, channelId, color).toDomain()
+    override suspend fun updateProfileExtra(
+        name: String, birthday: String?, channelId: Long?, color: Int?, surname: String?, email: String?,
+    ): User = api.updateProfileExtra(name, birthday, channelId, color, surname, email).toDomain()
 
     override suspend fun chatTtl(peer: Long): Int = runCatching {
         if (peer < 0) api.getTtl(null, -peer).seconds else api.getTtl(peer, null).seconds
@@ -796,6 +797,23 @@ class ChatRepositoryImpl(
         }
     }
 
+    override suspend fun premiumInfo() = api.premium()
+
+    override suspend fun buyPremium(months: Int, group: Long?, to: Long?): Int =
+        api.buyPremium(com.icqnew.app.data.remote.BuyPremiumRequest(months, group, to)).balance
+
+    override suspend fun sendGift(to: Long, gift: String, text: String, anonymous: Boolean): Int =
+        api.sendGift(com.icqnew.app.data.remote.SendGiftRequest(to, gift, text, anonymous)).balance
+
+    override suspend fun userGifts(uin: Long) = api.userGifts(uin)
+
+    override suspend fun markPlayed(localId: Long) {
+        val e = messageDao.byId(localId) ?: return
+        if (e.played) return
+        messageDao.setPlayed(localId)
+        if (!e.fromMe) e.serverId?.let { socket.send(WsOut("played", id = it)) }
+    }
+
     override suspend fun replyStory(storyId: Long, text: String) {
         applyMessage(api.replyStory(storyId, text), firstSync = true)
     }
@@ -986,6 +1004,7 @@ class ChatRepositoryImpl(
                     reactions = encodeReactions(m),
                     failReason = null,
                     views = maxOf(existing.views, m.views),
+                    played = existing.played || m.played,
                     poll = mergePoll(m.poll, existing.poll),
                     status = when {
                         existing.status == 2 || (mine && m.read) -> 2
@@ -1020,6 +1039,7 @@ class ChatRepositoryImpl(
             views = m.views,
             poll = mergePoll(m.poll, null),
             storyAtt = m.story?.let { it.attId ?: "" },
+            played = m.played,
         )
         return if (messageDao.insert(e) == -1L) null else e
     }
@@ -1151,6 +1171,7 @@ class ChatRepositoryImpl(
             MessageKind.VOICE -> "🎤 Голосовое сообщение"
             MessageKind.VIDEO_NOTE -> "⏺ Видеосообщение"
             MessageKind.POLL -> "📊 $text"
+            MessageKind.GIFT -> "🎁 Подарок" + (com.icqnew.app.domain.GiftCatalog.byId(attName)?.let { ": ${it.first} ${it.second}" } ?: "")
         }
 
     private companion object {
@@ -1160,12 +1181,13 @@ class ChatRepositoryImpl(
 }
 
 internal fun UserDto.toEntity() =
-    ContactEntity(uin, name, avatarUrl, online, lastSeen, about, username = username, verified = verified)
+    ContactEntity(uin, name, avatarUrl, online, lastSeen, about, username = username, verified = verified, premium = premium)
 
 internal fun ContactEntity.toDomain() =
     User(
         uin, name, avatarUrl, online, lastSeen, about, isGroup = isGroup, membersCount = members, ownerUin = owner,
         isChannel = kind == "channel", isPublic = isPublic, username = username, verified = verified,
+        premium = premium,
     )
 
 internal fun MessageEntity.toDomain(me: Long) = ChatMessage(
@@ -1198,6 +1220,7 @@ internal fun MessageEntity.toDomain(me: Long) = ChatMessage(
     views = views,
     storyAtt = storyAtt,
     isRead = isRead,
+    played = played,
     poll = poll?.let { decodePollDto(it) }?.let { p ->
         com.icqnew.app.domain.Poll(
             p.options.map { com.icqnew.app.domain.PollOption(it.text, it.votes) },

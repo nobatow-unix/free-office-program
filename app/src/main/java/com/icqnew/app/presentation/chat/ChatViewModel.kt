@@ -381,16 +381,34 @@ class ChatViewModel(
      * Voice messages that follow each other are played one after another (like Telegram):
      * when one ends, the next message — if it is a voice message too — starts by itself.
      */
-    private val playNext: (Long) -> Unit = { doneId ->
+    fun playVoice(m: ChatMessage) {
+        // this message + the voice messages right after it: they play one after another,
+        // also when I leave the chat (the player lives in the app, mini player on top)
         val list = messages.value.filter { it.kind != MessageKind.SYSTEM }
-        val i = list.indexOfFirst { it.id == doneId }
-        val next = if (i >= 0) list.getOrNull(i + 1) else null
-        if (next != null && next.kind == MessageKind.VOICE && !next.deleted) playVoice(next)
+        val start = list.indexOfFirst { it.id == m.id }.coerceAtLeast(0)
+        val run = buildList {
+            add(m)
+            for (x in list.drop(start + 1)) {
+                if (x.kind == MessageKind.VOICE && !x.deleted) add(x) else break
+            }
+        }
+        val chatName = peer.value?.name ?: ""
+        player.play(run.map { x ->
+            VoicePlayer.Item(
+                x.id, x.attId, x.localPath, x.attName ?: "voice.m4a",
+                title = when {
+                    x.fromMe -> "Вы"
+                    peerUin < 0 -> members.value[x.fromUin]?.name ?: chatName
+                    else -> chatName
+                },
+                peer = peerUin,
+            )
+        }, 0)
     }
 
-    fun playVoice(m: ChatMessage) {
-        player.onFinished = playNext
-        player.toggle(m.id, m.attId, m.localPath, m.attName ?: "voice.m4a")
+    /** Round video watched with sound: the dot goes away for the sender too. */
+    fun markPlayed(m: ChatMessage) {
+        if (!m.played) viewModelScope.launch { repo.markPlayed(m.id) }
     }
 
     fun seekVoice(m: ChatMessage, fraction: Float) {
@@ -427,14 +445,13 @@ class ChatViewModel(
     fun onLeave() {
         visible = false
         repo.setActiveChat(null)
-        player.stop()
+        // voice playback goes on after leaving the chat (mini player at the top)
         finishRecording(false)
         val text = if (_editing.value == null) _input.value else ""
         viewModelScope.launch { repo.saveDraft(peerUin, text) }
     }
 
     override fun onCleared() {
-        if (player.onFinished === playNext) player.onFinished = null
         repo.setActiveChat(null)
         recorder.cancel()
     }

@@ -62,7 +62,7 @@ class AppContainer(private val context: Context) {
     }
 
     private val db = Room.databaseBuilder(context, IcqDatabase::class.java, "icq.db")
-        .addMigrations(com.icqnew.app.data.local.MIGRATION_6_7, com.icqnew.app.data.local.MIGRATION_7_8, com.icqnew.app.data.local.MIGRATION_8_9)
+        .addMigrations(com.icqnew.app.data.local.MIGRATION_6_7, com.icqnew.app.data.local.MIGRATION_7_8, com.icqnew.app.data.local.MIGRATION_8_9, com.icqnew.app.data.local.MIGRATION_9_10, com.icqnew.app.data.local.MIGRATION_10_11)
         .fallbackToDestructiveMigration()
         .build()
     private val api = IcqApi(httpClient, store)
@@ -79,6 +79,11 @@ class AppContainer(private val context: Context) {
     val authRepository: AuthRepository = AuthRepositoryImpl(api, store, socket, db)
     val settingsRepository: SettingsRepository = SettingsRepositoryImpl(api, store)
     val chatRepository: ChatRepository = ChatRepositoryImpl(api, socket, db, store, sound, notifier, appScope)
+
+    init {
+        // a voice message that starts playing counts as listened (the dot goes away, also for the sender)
+        voicePlayer.onStart = { id -> appScope.launch { runCatching { chatRepository.markPlayed(id) } } }
+    }
     val callManager = CallManager(context, socket, api, db, notifier, appScope)
     val updater = com.icqnew.app.data.update.Updater(context, api, appScope)
 

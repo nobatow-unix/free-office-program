@@ -44,7 +44,40 @@ from pydantic import BaseModel, Field
 DB_PATH = os.environ.get("ICQ_DB", "icq_v2.db")
 AVATAR_DIR = os.environ.get("ICQ_AVATARS", "avatars")
 UPLOAD_DIR = os.environ.get("ICQ_UPLOADS", "uploads")
-MAX_UPLOAD = 4 * 1024 * 1024 * 1024  # 4 GB
+MAX_UPLOAD = 4 * 1024 * 1024 * 1024  # 4 GB (Premium)
+FREE_UPLOAD = 2 * 1024 * 1024 * 1024  # 2 GB without Premium
+
+# ---- Premium (prices in manats; the admin tops balances up in the admin panel) ----
+PREMIUM_PLANS = [  # months, price
+    {"months": 1, "price": int(os.environ.get("ICQ_PREMIUM_1", "30"))},
+    {"months": 3, "price": int(os.environ.get("ICQ_PREMIUM_3", "80"))},
+    {"months": 12, "price": int(os.environ.get("ICQ_PREMIUM_12", "250"))},
+]
+GROUP_PLANS = [
+    {"months": 1, "price": int(os.environ.get("ICQ_GROUP_PREMIUM_1", "50"))},
+    {"months": 12, "price": int(os.environ.get("ICQ_GROUP_PREMIUM_12", "450"))},
+]
+GIFTS = [  # id, picture (emoji), name, price
+    {"id": "rose", "emoji": "🌹", "name": "Роза", "price": 5},
+    {"id": "teddy", "emoji": "🧸", "name": "Мишка", "price": 10},
+    {"id": "cake", "emoji": "🎂", "name": "Торт", "price": 10},
+    {"id": "heart", "emoji": "💝", "name": "Сердце", "price": 15},
+    {"id": "gift", "emoji": "🎁", "name": "Сюрприз", "price": 20},
+    {"id": "star", "emoji": "⭐", "name": "Звезда", "price": 25},
+    {"id": "diamond", "emoji": "💎", "name": "Бриллиант", "price": 50},
+    {"id": "crown", "emoji": "👑", "name": "Корона", "price": 100},
+    {"id": "rocket", "emoji": "🚀", "name": "Ракета", "price": 150},
+]
+GIFT_BY_ID = {g["id"]: g for g in GIFTS}
+PREMIUM_PERKS = [
+    {"icon": "wallpaper", "title": "Фоны и темы чатов", "text": "Все фоны, цветовые темы оформления"},
+    {"icon": "star", "title": "Звезда и цветное имя", "text": "Значок ⭐ рядом с именем, цвет имени и профиля"},
+    {"icon": "limits", "title": "Больше возможностей", "text": "Файлы до 4 ГБ, 10 папок чатов, 10 закреплённых чатов"},
+    {"icon": "icon", "title": "Значок приложения", "text": "Другие значки ICQ на главном экране"},
+]
+MONTH_MS = 30 * 86_400_000
+# "Поддержка" opens a chat with this account (set ICQ_SUPPORT_UIN to the admin's own ID); the ICQ bot otherwise
+SUPPORT_UIN = int(os.environ.get("ICQ_SUPPORT_UIN", "10000000") or "10000000")
 KINDS = ("text", "sticker", "image", "file", "voice", "video_note", "poll")
 GROUP_DEFAULTS = {
     "only_admins_add": False,   # only admins may add members
@@ -256,6 +289,25 @@ def init_db() -> None:
         _add_column(c, "groups", "ttl INTEGER NOT NULL DEFAULT 0")
         # a private message that answers a publication (story): which one, and its picture
         _add_column(c, "messages", "story_id INTEGER")
+        # voice / round video: has the recipient listened to it (blue dot until then, like Telegram)
+        _add_column(c, "messages", "played INTEGER NOT NULL DEFAULT 0")
+        # Premium: balance (whole manats, topped up by the admin), subscription end, account extras
+        _add_column(c, "users", "balance INTEGER NOT NULL DEFAULT 0")
+        _add_column(c, "users", "premium_until INTEGER NOT NULL DEFAULT 0")
+        _add_column(c, "users", "surname TEXT")
+        _add_column(c, "users", "email TEXT")
+        _add_column(c, "groups", "premium_until INTEGER NOT NULL DEFAULT 0")
+        c.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS balance_log(id INTEGER PRIMARY KEY AUTOINCREMENT, uin INTEGER NOT NULL,
+                delta INTEGER NOT NULL, reason TEXT NOT NULL, ts INTEGER NOT NULL);
+            CREATE INDEX IF NOT EXISTS idx_balance_uin ON balance_log(uin, ts);
+            CREATE TABLE IF NOT EXISTS user_gifts(id INTEGER PRIMARY KEY AUTOINCREMENT, to_uin INTEGER NOT NULL,
+                from_uin INTEGER NOT NULL, gift TEXT NOT NULL, text TEXT, anonymous INTEGER NOT NULL DEFAULT 0,
+                ts INTEGER NOT NULL);
+            CREATE INDEX IF NOT EXISTS idx_gifts_to ON user_gifts(to_uin, ts);
+            """
+        )
         _add_column(c, "messages", "story_att TEXT")
         # personal auto-delete default (applies to private chats without their own timer, and to new groups)
         _add_column(c, "users", f"default_ttl INTEGER NOT NULL DEFAULT {DEFAULT_TTL}")
@@ -495,6 +547,8 @@ def user_json(row: sqlite3.Row, full: bool = False, viewer: Optional[int] = None
         "last_seen": row["last_seen"] if visible else 0,
         "username": row["username"],
         "verified": bool(row["verified"]),
+        "premium": (_col(row, "premium_until", 0) or 0) > now_ms(),
+        "surname": _col(row, "surname") or "",
         "color": _col(row, "color", 0) or 0,
         "birthday": _col(row, "birthday") or "",
     }
@@ -522,6 +576,10 @@ def me_json(row: sqlite3.Row) -> dict:
     d["searchable"] = bool(row["searchable"])
     d["show_online"] = bool(row["show_online"])
     d["phone"] = row["phone"]
+    d["balance"] = _col(row, "balance", 0) or 0
+    d["premium_until"] = _col(row, "premium_until", 0) or 0
+    d["surname"] = _col(row, "surname") or ""
+    d["email"] = _col(row, "email") or ""
     return d
 
 
@@ -590,6 +648,7 @@ def _msg_json(c: sqlite3.Connection, row: sqlite3.Row) -> dict:
         "reply_to": row["reply_to"],
         "edited": bool(row["edited"]),
         "deleted": bool(row["deleted"]),
+        "played": bool(_col(row, "played", 0)),
         "fwd_name": row["fwd_name"],
         "rev": row["rev"],
         "reactions": reactions_of(c, row["id"]),
@@ -674,7 +733,9 @@ class ProfileIn(BaseModel):
     about: Optional[str] = Field(default=None, max_length=140)
     birthday: Optional[str] = None  # "DD.MM" or "DD.MM.YYYY"; "" clears
     channel_id: Optional[int] = None  # 0 clears
-    color: Optional[int] = None  # 0..8
+    color: Optional[int] = None  # 0..8 (colours above 4 need Premium)
+    surname: Optional[str] = Field(default=None, max_length=40)
+    email: Optional[str] = Field(default=None, max_length=80)
 
 
 class BlockIn(BaseModel):
@@ -1187,7 +1248,17 @@ async def update_me(body: ProfileIn, authorization: Optional[str] = Header(None)
                     raise HTTPException(400, "Можно указать только свой канал")
             c.execute("UPDATE users SET channel_id=? WHERE uin=?", (body.channel_id or None, uin))
         if body.color is not None:
-            c.execute("UPDATE users SET color=? WHERE uin=?", (max(0, min(8, body.color)), uin))
+            col = max(0, min(8, body.color))
+            if col > 4 and not is_premium(c, uin):
+                raise HTTPException(402, "Этот цвет доступен с ICQ Premium ⭐")
+            c.execute("UPDATE users SET color=? WHERE uin=?", (col, uin))
+        if body.surname is not None:
+            c.execute("UPDATE users SET surname=? WHERE uin=?", (body.surname.strip() or None, uin))
+        if body.email is not None:
+            e = body.email.strip()
+            if e and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", e):
+                raise HTTPException(400, "Неверный email")
+            c.execute("UPDATE users SET email=? WHERE uin=?", (e or None, uin))
         row = c.execute("SELECT * FROM users WHERE uin=?", (uin,)).fetchone()
     await broadcast_profile(uin)
     return me_json(row)
@@ -1657,8 +1728,10 @@ async def upload(
 ) -> dict:
     uin = require_uin(authorization)
     declared = int(request.headers.get("content-length") or 0)
-    if declared > MAX_UPLOAD:
-        raise HTTPException(413, "Файл больше 4 ГБ")
+    with conn() as c0:
+        limit = MAX_UPLOAD if is_premium(c0, uin) else FREE_UPLOAD
+    if declared > limit:
+        raise HTTPException(413, "Файл больше 4 ГБ" if limit == MAX_UPLOAD else "Без Premium — файлы до 2 ГБ")
     fid = secrets.token_hex(16)
     path = os.path.join(UPLOAD_DIR, fid)
     size = 0
@@ -1669,8 +1742,8 @@ async def upload(
                 if not chunk:
                     continue
                 size += len(chunk)
-                if size > MAX_UPLOAD:
-                    raise HTTPException(413, "Файл больше 4 ГБ")
+                if size > limit:
+                    raise HTTPException(413, "Файл больше 4 ГБ" if limit == MAX_UPLOAD else "Без Premium — файлы до 2 ГБ")
                 f.write(chunk)
     except BaseException:
         try:
@@ -1912,6 +1985,141 @@ def search_chats(q: str = Query(""), authorization: Optional[str] = Header(None)
             d = group_json(c, g, with_members=False)
             d["member"] = is_member(c, g["id"], uin)
             out.append(d)
+        return out
+
+
+def is_premium(c: sqlite3.Connection, uin: int) -> bool:
+    r = c.execute("SELECT premium_until FROM users WHERE uin=?", (uin,)).fetchone()
+    return bool(r and (r["premium_until"] or 0) > now_ms())
+
+
+def _charge(c: sqlite3.Connection, uin: int, price: int, reason: str) -> int:
+    """Takes money from the balance (raises 402 when it is not enough). Returns the new balance."""
+    bal = c.execute("SELECT balance FROM users WHERE uin=?", (uin,)).fetchone()["balance"] or 0
+    if bal < price:
+        raise HTTPException(402, f"Недостаточно средств: нужно {price} TMT, на балансе {bal} TMT")
+    c.execute("UPDATE users SET balance=balance-? WHERE uin=?", (price, uin))
+    c.execute("INSERT INTO balance_log(uin, delta, reason, ts) VALUES(?,?,?,?)", (uin, -price, reason[:200], now_ms()))
+    return bal - price
+
+
+@app.get("/api/premium")
+def premium_info(authorization: Optional[str] = Header(None)) -> dict:
+    uin = require_uin(authorization)
+    with conn() as c:
+        u = c.execute("SELECT balance, premium_until FROM users WHERE uin=?", (uin,)).fetchone()
+        log = c.execute("SELECT delta, reason, ts FROM balance_log WHERE uin=? ORDER BY id DESC LIMIT 30", (uin,)).fetchall()
+        groups = c.execute(
+            "SELECT g.id, g.name, g.kind, g.premium_until FROM groups g JOIN group_members m ON m.gid=g.id"
+            " WHERE m.uin=? AND (g.owner=? OR m.role IN ('owner','admin')) ORDER BY g.name", (uin, uin),
+        ).fetchall()
+    return {
+        "balance": u["balance"] or 0, "premium_until": u["premium_until"] or 0, "currency": "TMT",
+        "plans": PREMIUM_PLANS, "group_plans": GROUP_PLANS, "gifts": GIFTS, "perks": PREMIUM_PERKS,
+        "history": [{"delta": r["delta"], "reason": r["reason"], "ts": r["ts"]} for r in log],
+        "my_groups": [{"id": g["id"], "name": g["name"], "kind": g["kind"], "premium_until": g["premium_until"] or 0}
+                      for g in groups],
+        "top_up": "Чтобы пополнить баланс, напишите в поддержку: оплата принимается вручную, "
+                  "администратор зачислит сумму, и придёт уведомление от «ICQ».",
+        "support_uin": SUPPORT_UIN,
+    }
+
+
+class BuyPremiumIn(BaseModel):
+    months: int
+    group: Optional[int] = None  # Premium for my group / channel
+    to: Optional[int] = None  # Premium as a present to another user
+
+
+@app.post("/api/premium/buy")
+async def premium_buy(body: BuyPremiumIn, authorization: Optional[str] = Header(None)) -> dict:
+    uin = require_uin(authorization)
+    plans = GROUP_PLANS if body.group else PREMIUM_PLANS
+    plan = next((p for p in plans if p["months"] == body.months), None)
+    if not plan:
+        raise HTTPException(400, "Нет такого тарифа")
+    now = now_ms()
+    note = None
+    with conn() as c:
+        if body.group:
+            g = c.execute("SELECT * FROM groups WHERE id=?", (body.group,)).fetchone()
+            if not g:
+                raise HTTPException(404, "Чат не найден")
+            require_group_admin(c, body.group, uin)
+            bal = _charge(c, uin, plan["price"], f"Premium для «{g['name']}» на {body.months} мес.")
+            until = max(now, g["premium_until"] or 0) + body.months * MONTH_MS
+            c.execute("UPDATE groups SET premium_until=? WHERE id=?", (until, body.group))
+        else:
+            target = body.to or uin
+            t = c.execute("SELECT * FROM users WHERE uin=? AND banned=0", (target,)).fetchone()
+            if not t or target in (BOT_UIN, SERVICE_UIN):
+                raise HTTPException(404, "Пользователь не найден")
+            who = "себе" if target == uin else f"в подарок: {t['name']}"
+            bal = _charge(c, uin, plan["price"], f"Premium на {body.months} мес. ({who})")
+            until = max(now, t["premium_until"] or 0) + body.months * MONTH_MS
+            c.execute("UPDATE users SET premium_until=? WHERE uin=?", (until, target))
+            if target != uin:
+                me = c.execute("SELECT name FROM users WHERE uin=?", (uin,)).fetchone()["name"]
+                note = (target, f"🎁 {me} подарил(а) вам **ICQ Premium** на {body.months} мес. ⭐")
+    if note:
+        asyncio.create_task(service_send(*note))
+    return {"balance": bal, "until": until}
+
+
+class SendGiftIn(BaseModel):
+    to: int
+    gift: str
+    text: str = ""
+    anonymous: bool = False
+
+
+@app.post("/api/gifts/send")
+async def send_gift(body: SendGiftIn, authorization: Optional[str] = Header(None)) -> dict:
+    """A gift (also to myself): shown in the profile; the recipient gets a gift message in the chat."""
+    uin = require_uin(authorization)
+    g = GIFT_BY_ID.get(body.gift)
+    if not g:
+        raise HTTPException(400, "Нет такого подарка")
+    text = body.text.strip()[:200]
+    with conn() as c:
+        t = c.execute("SELECT * FROM users WHERE uin=? AND banned=0", (body.to,)).fetchone()
+        if not t or body.to in (BOT_UIN, SERVICE_UIN):
+            raise HTTPException(404, "Пользователь не найден")
+        if body.to != uin and is_blocked(c, body.to, uin):
+            raise HTTPException(403, "Пользователь ограничил сообщения")
+        bal = _charge(c, uin, g["price"], f"Подарок {g['emoji']} {g['name']}" + ("" if body.to == uin else f" → {t['name']}"))
+        now = now_ms()
+        c.execute("INSERT INTO user_gifts(to_uin, from_uin, gift, text, anonymous, ts) VALUES(?,?,?,?,?,?)",
+                  (body.to, uin, g["id"], text, int(body.anonymous), now))
+        msg = None
+        if body.to != uin:
+            for a, b in ((uin, body.to), (body.to, uin)):
+                c.execute("INSERT OR IGNORE INTO contacts(owner, contact) VALUES(?,?)", (a, b))
+            cur = c.execute(
+                "INSERT INTO messages(client_id, from_uin, to_uin, text, ts, kind, rev, att_name) VALUES(?,?,?,?,?,'gift',?,?)",
+                ("gift-" + secrets.token_hex(8), uin, body.to, text, now, next_rev(c), g["id"]),
+            )
+            row = c.execute("SELECT * FROM messages WHERE id=?", (cur.lastrowid,)).fetchone()
+            msg = msg_json(c, row)
+            push_message(c, row, [body.to])
+    if msg:
+        await manager.send(body.to, {"type": "message", "message": msg})
+        await manager.send(uin, {"type": "message", "message": msg})
+    return {"balance": bal, "message": msg}
+
+
+@app.get("/api/users/{other}/gifts")
+def user_gifts(other: int, authorization: Optional[str] = Header(None)) -> list:
+    uin = require_uin(authorization)
+    with conn() as c:
+        rows = c.execute("SELECT * FROM user_gifts WHERE to_uin=? ORDER BY id DESC LIMIT 100", (other,)).fetchall()
+        out = []
+        for r in rows:
+            g = GIFT_BY_ID.get(r["gift"]) or {"id": r["gift"], "emoji": "🎁", "name": "Подарок", "price": 0}
+            f = None if (r["anonymous"] and other != uin and r["from_uin"] != uin) else \
+                c.execute("SELECT * FROM users WHERE uin=?", (r["from_uin"],)).fetchone()
+            out.append({"gift": g, "text": r["text"] or "", "ts": r["ts"],
+                        "from": user_json(f, c=c) if f else None})
         return out
 
 
@@ -2951,6 +3159,47 @@ def require_admin(creds: HTTPBasicCredentials = Depends(basic)) -> None:
         raise HTTPException(401, "Unauthorized", headers={"WWW-Authenticate": "Basic"})
 
 
+@app.post("/admin/api/balance")
+async def admin_balance(body: dict, _: None = Depends(require_admin)) -> dict:
+    """Top up (or take back) a user's balance: {who: ID / phone / @username, amount, reason}."""
+    who = str(body.get("who") or "").strip()
+    try:
+        amount = int(body.get("amount") or 0)
+    except (TypeError, ValueError):
+        amount = 0
+    if not who or amount == 0:
+        raise HTTPException(400, "Укажите пользователя и сумму")
+    with conn() as c:
+        u = None
+        if who.startswith("@"):
+            u = c.execute("SELECT * FROM users WHERE username=? COLLATE NOCASE", (who[1:],)).fetchone()
+        elif who.isdigit() and len(who) <= 10:
+            u = c.execute("SELECT * FROM users WHERE uin=?", (int(who),)).fetchone()
+        if u is None:
+            u = c.execute("SELECT * FROM users WHERE phone=?", (norm_phone(who),)).fetchone()
+        if u is None:
+            raise HTTPException(404, "Пользователь не найден")
+        new = (u["balance"] or 0) + amount
+        if new < 0:
+            raise HTTPException(400, "Баланс не может быть меньше нуля")
+        c.execute("UPDATE users SET balance=? WHERE uin=?", (new, u["uin"]))
+        c.execute("INSERT INTO balance_log(uin, delta, reason, ts) VALUES(?,?,?,?)",
+                  (u["uin"], amount, (body.get("reason") or "Пополнение (администратор)")[:200], now_ms()))
+        uin, name = u["uin"], u["name"]
+    if amount > 0:
+        asyncio.create_task(service_send(uin, f"💰 Ваш баланс пополнен на **{amount} TMT**. Сейчас: {new} TMT."))
+    return {"uin": uin, "name": name, "balance": new}
+
+
+@app.get("/admin/api/balance")
+def admin_balance_log(_: None = Depends(require_admin)) -> list:
+    with conn() as c:
+        rows = c.execute(
+            "SELECT b.*, u.name FROM balance_log b LEFT JOIN users u ON u.uin=b.uin ORDER BY b.id DESC LIMIT 100"
+        ).fetchall()
+        return [{"uin": r["uin"], "name": r["name"], "delta": r["delta"], "reason": r["reason"], "ts": r["ts"]} for r in rows]
+
+
 @app.get("/admin/api/pending")
 def admin_pending(_: None = Depends(require_admin)) -> dict:
     now = now_ms()
@@ -3102,10 +3351,15 @@ input{width:100%;padding:10px 12px;border:1px solid #d5d9d7;border-radius:10px;f
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#bbb;margin-right:6px}.dot.on{background:#00CB66}
 </style></head><body>
 <header><img src="/logo.svg" alt="">ICQ — администратор</header>
-<nav><button id="t1" class="on" onclick="tab(1)">Коды входа</button><button id="t2" onclick="tab(2)">Пользователи</button><button id="t3" onclick="tab(3)">Группы и каналы</button><button id="t4" onclick="tab(4)">Галочки ✔</button></nav>
+<nav><button id="t1" class="on" onclick="tab(1)">Коды входа</button><button id="t2" onclick="tab(2)">Пользователи</button><button id="t3" onclick="tab(3)">Группы и каналы</button><button id="t4" onclick="tab(4)">Галочки ✔</button><button id="t5" onclick="tab(5)">Баланс ⭐</button></nav>
 <main>
 <div class="stats" id="stats"></div>
 <div id="codes"></div>
+<div id="balance" style="display:none">
+<p style="opacity:.8">Пополнение баланса (Premium, подарки). Пользователь получит уведомление от «ICQ». Отрицательная сумма — списание.</p>
+<input id="bwho" placeholder="ID, телефон или @username"> <input id="bamt" type="number" placeholder="Сумма, TMT" style="width:120px">
+<input id="breason" placeholder="Комментарий (необязательно)"> <button onclick="topUp()">Зачислить</button>
+<div id="bres" style="margin:10px 0;font-weight:bold"></div><div id="blog"></div></div>
 <div id="users" style="display:none"><input id="q" placeholder="Поиск: имя, телефон, @username или ID" oninput="loadUsers()"><div id="ulist"></div></div>
 <div id="groups" style="display:none"><input id="gq" placeholder="Поиск: название, @username или ID" oninput="loadGroups()"><div id="glist"></div></div>
 <div id="verify" style="display:none">
@@ -3119,7 +3373,7 @@ input{width:100%;padding:10px 12px;border:1px solid #d5d9d7;border-radius:10px;f
 <script>
 var cur=1;
 var CHECK='<svg width="16" height="16" viewBox="0 0 24 24" style="vertical-align:-2px;margin-left:4px"><circle cx="12" cy="12" r="11" fill="#00CB66"/><path d="M7 12.5l3.2 3.2L17 9" stroke="#fff" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-function tab(n){cur=n;['codes','users','groups','verify'].forEach(function(id,i){document.getElementById('t'+(i+1)).className=n==i+1?'on':'';document.getElementById(id).style.display=n==i+1?'':'none'});
+function tab(n){cur=n;if(n==5)loadBal();['codes','users','groups','verify','balance'].forEach(function(id,i){document.getElementById('t'+(i+1)).className=n==i+1?'on':'';document.getElementById(id).style.display=n==i+1?'':'none'});
 if(n==2)loadUsers();if(n==3)loadGroups();}
 function verify(kind,input,on){var id=parseInt(document.getElementById(input).value);if(!id){alert('Введите ID');return}
 fetch('/admin/api/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:kind,id:id,on:on})}).then(function(r){return r.json().then(function(j){return [r.ok,j]})}).then(function(x){
@@ -3129,6 +3383,11 @@ d.appendChild(el('div','meta','ID '+g.id+(g.username?' · @'+g.username:'')+' ·
 var b=el('div','btns');var v=el('button','b '+(g.verified?'sec':''),g.verified?'Снять галочку':'Поставить галочку ✔');
 v.onclick=function(){fetch('/admin/api/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'group',id:g.id,on:!g.verified})}).then(loadGroups)};b.appendChild(v);d.appendChild(b);return d}
 function loadGroups(){var q=document.getElementById('gq').value;fetch('/admin/api/groups?q='+encodeURIComponent(q)).then(function(r){return r.json()}).then(function(list){var l=document.getElementById('glist');l.innerHTML='';if(!list.length){l.appendChild(el('div','empty','Ничего нет'));return}list.forEach(function(g){l.appendChild(grow(g))})})}
+function topUp(){var b={who:document.getElementById('bwho').value,amount:parseInt(document.getElementById('bamt').value||'0'),reason:document.getElementById('breason').value};
+fetch('/admin/api/balance',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(function(r){return r.json().then(function(j){return [r.ok,j]})}).then(function(x){var e=document.getElementById('bres');
+if(x[0]){e.textContent='✅ '+x[1].name+': баланс '+x[1].balance+' TMT';document.getElementById('bamt').value='';loadBal()}else{e.textContent='❌ '+(x[1].detail||'Ошибка')}})}
+function loadBal(){fetch('/admin/api/balance').then(function(r){return r.json()}).then(function(list){var l=document.getElementById('blog');l.innerHTML='';
+list.forEach(function(it){var d=el('div','row');d.appendChild(el('div','phone',(it.delta>0?'+':'')+it.delta+' TMT · '+(it.name||it.uin)));d.appendChild(el('div','',it.reason+' · '+fmt(it.ts)));l.appendChild(d)})})}
 function el(t,c,txt){var e=document.createElement(t);if(c)e.className=c;if(txt!=null)e.textContent=txt;return e}
 function row(it){
   var d=el('div','row'+(it.sent?' sent':'')+(it.expired?' expired':''));
@@ -3436,6 +3695,25 @@ async def handle_react(uin: int, data: dict) -> None:
         else:
             c.execute("INSERT OR REPLACE INTO reactions(msg_id, uin, emoji) VALUES(?,?,?)", (mid, uin, emoji))
         c.execute("UPDATE messages SET rev=? WHERE id=?", (next_rev(c), mid))
+        targets, payload = build_update(c, mid)
+    await manager.send_many(targets, payload)
+
+
+async def handle_played(uin: int, data: dict) -> None:
+    """The recipient listened to a voice message / watched a round video: the dot disappears for everybody."""
+    mid = _int(data.get("id"))
+    if mid is None:
+        return
+    with conn() as c:
+        r = c.execute("SELECT * FROM messages WHERE id=?", (mid,)).fetchone()
+        if not r or r["from_uin"] == uin or r["kind"] not in ("voice", "video_note") or _col(r, "played", 0):
+            return
+        if r["group_id"]:
+            if not is_member(c, r["group_id"], uin):
+                return
+        elif r["to_uin"] != uin:
+            return
+        c.execute("UPDATE messages SET played=1, rev=? WHERE id=?", (next_rev(c), mid))
         targets, payload = build_update(c, mid)
     await manager.send_many(targets, payload)
 
@@ -3878,6 +4156,8 @@ async def ws_endpoint(ws: WebSocket, token: str = Query("")) -> None:
                     await handle_delete(uin, data)
                 elif kind == "react":
                     await handle_react(uin, data)
+                elif kind == "played":
+                    await handle_played(uin, data)
                 elif kind == "call":
                     await handle_call(uin, data)
                 elif kind == "state":  # app went to foreground / background

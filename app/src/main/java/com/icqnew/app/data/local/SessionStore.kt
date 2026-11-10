@@ -43,6 +43,9 @@ class SessionStore(private val context: Context) {
         val soundChoice: String = "icq",
         val swipeAction: String = "delete",
         val archived: Set<String> = emptySet(),
+        /** chat folders as "name\tpeer,peer,…" lines */
+        val folders: String = "",
+        val language: String = "ru",
         val avatarPrivacy: String = "all",
         val phonePrivacy: String = "contacts",
     )
@@ -75,6 +78,8 @@ class SessionStore(private val context: Context) {
         val SOUND_CHOICE = stringPreferencesKey("sound_choice")
         val SWIPE = stringPreferencesKey("swipe_action")
         val ARCHIVED = androidx.datastore.preferences.core.stringSetPreferencesKey("archived")
+        val FOLDERS = androidx.datastore.preferences.core.stringPreferencesKey("folders")
+        val LANGUAGE = androidx.datastore.preferences.core.stringPreferencesKey("language")
         val PHONE_PRIV = stringPreferencesKey("phone_privacy")
     }
 
@@ -106,6 +111,8 @@ class SessionStore(private val context: Context) {
             soundChoice = p[Keys.SOUND_CHOICE] ?: "icq",
             swipeAction = p[Keys.SWIPE] ?: "delete",
             archived = p[Keys.ARCHIVED] ?: emptySet(),
+            folders = p[Keys.FOLDERS] ?: "",
+            language = p[Keys.LANGUAGE] ?: "ru",
             phonePrivacy = p[Keys.PHONE_PRIV] ?: "contacts",
         )
     }
@@ -213,6 +220,14 @@ class SessionStore(private val context: Context) {
 
     suspend fun setSwipeAction(v: String) {
         context.dataStore.edit { it[Keys.SWIPE] = v }
+    }
+
+    suspend fun setFolders(raw: String) {
+        context.dataStore.edit { it[Keys.FOLDERS] = raw }
+    }
+
+    suspend fun setLanguage(code: String) {
+        context.dataStore.edit { it[Keys.LANGUAGE] = code }
     }
 
     suspend fun setArchived(peer: Long, archived: Boolean) {

@@ -12,7 +12,11 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
 
-/** Plays one voice message at a time and exposes the progress. */
+/**
+ * Plays voice messages (one at a time) and exposes the progress.
+ * Lives in the app container, so playback goes on after leaving the chat (mini player on top),
+ * and a queue plays the following voice messages of the chat one after another.
+ */
 class VoicePlayer(private val cache: MediaCache, private val scope: CoroutineScope) {
 
     data class State(
@@ -21,7 +25,48 @@ class VoicePlayer(private val cache: MediaCache, private val scope: CoroutineSco
         val durationMs: Int = 0,
         val paused: Boolean = false,
         val speed: Float = 1f,
+        /** who sent it (mini player) */
+        val title: String = "",
+        /** chat of the message (tap on the mini player opens it) */
+        val peer: Long = 0,
     )
+
+    /** One voice message for the queue. */
+    data class Item(
+        val id: Long, val attId: String?, val localPath: String?, val name: String,
+        val title: String, val peer: Long,
+    )
+
+    private var current: Item? = null
+    private var queue: List<Item> = emptyList()
+
+    /** A message started playing: it is "listened" now (the blue dot goes away). */
+    var onStart: ((Long) -> Unit)? = null
+
+    /** Plays items[index] and then, by itself, the rest of [items]. A second tap pauses / continues. */
+    fun play(items: List<Item>, index: Int) {
+        val it = items.getOrNull(index) ?: return
+        if (_state.value.playingId == it.id) {
+            toggle(it.id, it.attId, it.localPath, it.name)
+            return
+        }
+        queue = items.drop(index + 1)
+        current = it
+        toggle(it.id, it.attId, it.localPath, it.name)
+    }
+
+    /** ✕ on the mini player. */
+    fun close() {
+        queue = emptyList()
+        current = null
+        stop()
+    }
+
+    fun pauseResume() {
+        val id = _state.value.playingId ?: return
+        val c = current ?: return
+        if (c.id == id) toggle(c.id, c.attId, c.localPath, c.name)
+    }
 
     /** Pending seek (0..1) for a message that is not loaded yet. */
     private var pendingSeek: Float? = null
@@ -64,14 +109,27 @@ class VoicePlayer(private val cache: MediaCache, private val scope: CoroutineSco
                 p.setOnCompletionListener {
                     val done = _state.value.playingId
                     stop()
-                    if (done != null) onFinished?.invoke(done)
+                    val next = queue.firstOrNull()
+                    if (next != null) { // the next voice message of the chat
+                        queue = queue.drop(1)
+                        current = next
+                        toggle(next.id, next.attId, next.localPath, next.name)
+                    } else {
+                        current = null
+                        if (done != null) onFinished?.invoke(done)
+                    }
                 }
                 applySpeed(p, _state.value.speed)
                 pendingSeek?.let { f -> p.seekTo((p.duration * f).toInt().coerceIn(0, p.duration)) }
                 pendingSeek = null
                 p.start()
                 player = p
-                _state.value = State(messageId, p.currentPosition, p.duration, speed = _state.value.speed)
+                val c = current?.takeIf { it.id == messageId }
+                _state.value = State(
+                    messageId, p.currentPosition, p.duration, speed = _state.value.speed,
+                    title = c?.title ?: "", peer = c?.peer ?: 0,
+                )
+                onStart?.invoke(messageId)
                 ticker = scope.launch(Dispatchers.Main) {
                     while (isActive) {
                         delay(200)

@@ -16,6 +16,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.SupportAgent
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.Folder
 import com.icqnew.app.presentation.appContainer
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.DoneAll
@@ -121,6 +127,12 @@ fun SettingsTab(
     var pickSound by remember { mutableStateOf(false) }
     var pickSwipe by remember { mutableStateOf(false) }
     var pickTtl by remember { mutableStateOf(false) }
+    var showFolders by remember { mutableStateOf(false) }
+    var showLanguage by remember { mutableStateOf(false) }
+    var showIcons by remember { mutableStateOf(false) }
+    val myProfile by vm.myProfile.collectAsStateWithLifecycle()
+    val premium = myProfile?.premium == true
+    LaunchedEffect(Unit) { vm.loadPremium() }
     val defaultTtl by vm.defaultTtl.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { vm.loadDefaultTtl() }
     val sessions by vm.sessions.collectAsStateWithLifecycle()
@@ -157,16 +169,6 @@ fun SettingsTab(
             Icon(Icons.Filled.Edit, "Изменить", tint = MaterialTheme.colorScheme.primary)
         }
 
-        // ---- account ----
-        Section("Аккаунт") {
-            Line(
-                Icons.Filled.AlternateEmail, "Имя пользователя",
-                session?.username?.takeIf { it.isNotEmpty() }?.let { "@$it" } ?: "не задано", arrow = true,
-            ) { editUsername = true }
-            Line(Icons.Filled.PhoneAndroid, "Телефон", if ((session?.phone ?: "").isNotBlank()) "+" + session?.phone else "—")
-            Line(Icons.Filled.Bookmark, "Избранное", "заметки и файлы", arrow = true) { vm.openSaved(onOpenChat) }
-        }
-
         // ---- privacy ----
         Section("Конфиденциальность") {
             Line(
@@ -195,10 +197,14 @@ fun SettingsTab(
             Line(Icons.Filled.Block, "Заблокированные", if (blocked.isEmpty()) "Нет" else "${blocked.size}", arrow = true) {
                 showBlocked = true
             }
+        }
+
+        Section("Устройства") {
             Line(
-                Icons.Filled.Devices, "Устройства",
+                Icons.Filled.Devices, "Активные сеансы",
                 if (sessions.isEmpty()) null else "${sessions.size}", arrow = true,
             ) { vm.loadSessions(); showDevices = true }
+            Line(Icons.Filled.QrCodeScanner, "Веб-версия", "вход по QR-коду в профиле")
         }
 
         // ---- notifications ----
@@ -211,8 +217,15 @@ fun SettingsTab(
             )
         }
 
+        Section("Папки с чатами") {
+            Line(
+                Icons.Filled.Folder, "Папки",
+                if (app.folders.isEmpty()) "нет" else "${app.folders.size}", arrow = true,
+            ) { showFolders = true }
+        }
+
         // ---- chats ----
-        Section("Чаты") {
+        Section("Настройки чатов") {
             Line(
                 Icons.Filled.Timer, "Автоудаление сообщений",
                 if (defaultTtl < 0) "…" else ttlName(defaultTtl), arrow = true,
@@ -243,24 +256,34 @@ fun SettingsTab(
                         )
                     }
             }
-            Line(Icons.Filled.Palette, "Цвет оформления", Accents.getOrNull(app.accent)?.first)
+            Line(Icons.Filled.Palette, "Цвет оформления", Accents.getOrNull(app.accent)?.first + if (!premium) " · 🔒 больше с Premium" else "")
             Row(
                 Modifier.fillMaxWidth().padding(start = 56.dp, end = 16.dp, bottom = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Accents.forEachIndexed { i, (_, color) ->
+                    val locked = i > 2 && !premium
                     Box(
-                        Modifier.size(34.dp).clip(CircleShape).background(color).clickable { vm.setAccent(i) },
+                        Modifier.size(34.dp).clip(CircleShape).background(color).clickable {
+                            if (locked) Toast.makeText(context, "Этот цвет — с ICQ Premium ⭐", Toast.LENGTH_SHORT).show()
+                            else vm.setAccent(i)
+                        },
                         contentAlignment = Alignment.Center,
                     ) {
                         if (app.accent == i) Icon(Icons.Filled.Check, null, Modifier.size(18.dp), tint = Color.White)
+                        else if (locked) Icon(Icons.Filled.Lock, null, Modifier.size(15.dp), tint = Color.White)
                     }
                 }
             }
+            Line(Icons.Filled.Apps, "Значок приложения", if (premium) null else "🔒 Premium", arrow = true) { showIcons = true }
         }
 
-        // ---- data ----
-        Section("Данные и память") {
+        Section("Язык") {
+            Line(Icons.Filled.Language, "Язык приложения", languageName(app.language), arrow = true) { showLanguage = true }
+        }
+
+        // ---- the rest ----
+        Section("Прочие настройки") {
             Line(Icons.Filled.Storage, "Очистить кэш", "Скачанные фото и файлы (переписка останется)", arrow = true) {
                 vm.clearCache(java.io.File(context.cacheDir, "media"))
             }
@@ -272,6 +295,20 @@ fun SettingsTab(
             Line(Icons.Filled.Info, "О приложении", "ICQ New " + updater.currentName, arrow = true) { showAbout = true }
         }
 
+        Section(null) {
+            Line(Icons.Filled.SupportAgent, "Поддержка", "вопросы, пополнение баланса", arrow = true) {
+                onOpenChat(supportPeer(vm.premium.value))
+            }
+            Line(Icons.Filled.Share, "Пригласить друзей", null, arrow = true) {
+                val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain").putExtra(
+                    android.content.Intent.EXTRA_TEXT,
+                    "Пиши мне в ICQ New! " +
+                        (session?.username?.takeIf { it.isNotBlank() }?.let { com.icqnew.app.presentation.IcqLinks.user(it) } ?: "") +
+                        "\nСкачать: ${com.icqnew.app.presentation.IcqLinks.SITE}",
+                )
+                context.startActivity(android.content.Intent.createChooser(send, "Пригласить"))
+            }
+        }
         Section(null) {
             Line(Icons.AutoMirrored.Filled.ExitToApp, "Выйти из аккаунта", null, tint = MaterialTheme.colorScheme.error) {
                 vm.logout(onLoggedOut)
@@ -340,8 +377,12 @@ fun SettingsTab(
             onDismiss = { pickSwipe = false },
         )
     }
+    if (showFolders) FoldersDialog(vm, app.folders, premium) { showFolders = false }
+    if (showLanguage) LanguageDialog(app.language, onPick = { vm.setLanguage(it); showLanguage = false }) { showLanguage = false }
+    if (showIcons) AppIconDialog(premium) { showIcons = false }
     if (pickWallpaper) {
         com.icqnew.app.presentation.components.WallpaperPicker(
+            premium = premium,
             current = app.wallpaper.ifEmpty { "pattern" },
             allowReset = false,
             onPick = { vm.setWallpaper(it) },

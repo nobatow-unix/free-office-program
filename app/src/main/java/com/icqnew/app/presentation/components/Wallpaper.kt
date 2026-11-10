@@ -23,6 +23,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Photo
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -139,8 +141,13 @@ private fun saveWallpaper(context: Context, uri: Uri): String? {
 }
 
 @Composable
-fun WallpaperPicker(current: String, allowReset: Boolean, onPick: (String) -> Unit, onDismiss: () -> Unit) {
+fun WallpaperPicker(
+    current: String, allowReset: Boolean, onPick: (String) -> Unit, onDismiss: () -> Unit,
+    /** gradients and an own photo come with ICQ Premium */
+    premium: Boolean = true,
+) {
     val context = LocalContext.current
+    fun locked() = android.widget.Toast.makeText(context, "Этот фон — с ICQ Premium ⭐", android.widget.Toast.LENGTH_SHORT).show()
     val scope = rememberCoroutineScope()
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) scope.launch {
@@ -161,15 +168,20 @@ fun WallpaperPicker(current: String, allowReset: Boolean, onPick: (String) -> Un
             Column {
                 LazyVerticalGrid(columns = GridCells.Fixed(4), modifier = Modifier.heightIn(max = 380.dp)) {
                     item {
-                        Tile(selected = false, onClick = { picker.launch("image/*") }) {
+                        Tile(selected = false, onClick = { if (premium) picker.launch("image/*") else locked() }) {
                             Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerHigh), contentAlignment = Alignment.Center) {
-                                Icon(Icons.Filled.Photo, "Из галереи", tint = MaterialTheme.colorScheme.primary)
+                                Icon(if (premium) Icons.Filled.Photo else Icons.Filled.Lock, "Из галереи", tint = MaterialTheme.colorScheme.primary)
                             }
                         }
                     }
                     items(options) { spec ->
-                        Tile(selected = spec == current, onClick = { onPick(spec) }) {
+                        val lock = !premium && spec.startsWith("grad:")
+                        Tile(selected = spec == current, onClick = { if (lock) locked() else onPick(spec) }) {
                             WallpaperBackground(spec, Modifier.fillMaxSize())
+                            if (lock) Box(
+                                Modifier.size(26.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.45f)),
+                                contentAlignment = Alignment.Center,
+                            ) { Icon(Icons.Filled.Lock, "Premium", tint = Color.White, modifier = Modifier.size(15.dp)) }
                         }
                     }
                 }
