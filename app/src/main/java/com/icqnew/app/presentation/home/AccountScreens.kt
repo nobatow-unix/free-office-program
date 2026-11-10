@@ -504,17 +504,6 @@ fun AccountPage(vm: HomeViewModel, onOpen: (String) -> Unit, onLoggedOut: () -> 
             }
             Row2(Icons.Filled.QrCodeScanner, "Сканировать QR-код", "вход на другом устройстве") { scanning = true }
         }
-        Card(null) {
-            Row2(Icons.Filled.Phone, "Телефон", if (s.phone.isNotBlank()) "+" + s.phone else "—")
-            Row2(Icons.Filled.AlternateEmail, "Имя пользователя", s.username?.takeIf { it.isNotBlank() }?.let { "@$it" } ?: "не задано") { onOpen("edit") }
-            Row2(Icons.Filled.Email, "Email", profile?.email?.ifBlank { null } ?: "не указан") { onOpen("edit") }
-            Row2(Icons.Filled.Cake, "День рождения", profile?.birthday?.ifBlank { null } ?: "не указан") { onOpen("edit") }
-            Row2(Icons.Filled.Lock, "Пароль", if (profile?.hasPassword == true) "задан · изменить" else "не задан") { passwordDialog = true }
-            Text(
-                "Войти можно по ID ${s.uin}, @имени или почте и паролю.",
-                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(14.dp, 2.dp, 14.dp, 8.dp),
-            )
-        }
         Card("ICQ Premium") {
             val until = profile?.premiumUntil ?: 0L
             Row2(Icons.Filled.Verified, if (until > System.currentTimeMillis()) "Подключён" else "Не подключён",
@@ -641,6 +630,7 @@ fun EditAccountPage(vm: HomeViewModel, onPickAvatar: () -> Unit, onDone: () -> U
         }
         ExtraUsernames(onFragment)
         Card("О себе") { Field(about, { about = it.take(140) }, "Пара слов о себе") }
+        PasswordSetting(vm)
         Card("Контакты") {
             Field(email, { email = it.trim().take(80) }, "Email", KeyboardType.Email)
             Text(
@@ -828,5 +818,35 @@ fun FragmentPage(vm: HomeViewModel) {
             confirmButton = { TextButton(onClick = { confirm = null; buy(name, lot) }) { Text("Купить") } },
             dismissButton = { TextButton(onClick = { confirm = null }) { Text("Отмена") } },
         )
+    }
+}
+
+
+/** «Изменить» → Пароль: then you can sign in by ID / @name / e-mail + password. */
+@Composable
+private fun PasswordSetting(vm: HomeViewModel) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val repo = ctx.appContainer().chatRepository
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val session by vm.session.collectAsStateWithLifecycle()
+    val profile by vm.myProfile.collectAsStateWithLifecycle()
+    var open by remember { mutableStateOf(false) }
+    Card("Вход по паролю") {
+        Row2(Icons.Filled.Lock, "Пароль", if (profile?.hasPassword == true) "задан · изменить" else "не задан") { open = true }
+        Text(
+            "Войти можно по ID ${session?.uin ?: ""}, @имени или почте и паролю.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(14.dp, 2.dp, 14.dp, 8.dp),
+        )
+    }
+    if (open) PasswordDialog(hasPassword = profile?.hasPassword == true, onDismiss = { open = false }) { pw, old ->
+        scope.launch {
+            runCatching { repo.setPassword(pw, old) }
+                .onSuccess {
+                    open = false
+                    session?.uin?.let { vm.loadMyProfile(it) }
+                    android.widget.Toast.makeText(ctx, "Пароль сохранён", android.widget.Toast.LENGTH_SHORT).show()
+                }
+                .onFailure { android.widget.Toast.makeText(ctx, it.message ?: "Ошибка", android.widget.Toast.LENGTH_SHORT).show() }
+        }
     }
 }

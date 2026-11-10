@@ -138,4 +138,9 @@ class AppContainer(private val context: Context) {
             // Firebase is not configured — messages still arrive while the app/service is running
         }
     }
+
+    init {
+        // last in the class: every property above is ready
+        appScope.launch { runCatching { com.icqnew.app.data.local.Accounts.fixLegacyFolders(context, store) } }
+    }
 }

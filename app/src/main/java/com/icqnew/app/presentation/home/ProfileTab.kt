@@ -123,6 +123,16 @@ fun MyProfileTab(
             ) { Icon(Icons.Filled.Settings, "Настройки") }
         }
 
+        // ---- three buttons like Telegram ----
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            BigButton(Icons.Filled.Verified, "Premium", Modifier.weight(1f)) { onOpen("premium") }
+            BigButton(Icons.Filled.Person, "Аккаунт", Modifier.weight(1f)) { onOpen("account") }
+            BigButton(Icons.Filled.Edit, "Изменить", Modifier.weight(1f)) { onOpen("edit") }
+        }
+
         // ---- info card ----
         Card(
             Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
@@ -163,16 +173,6 @@ fun MyProfileTab(
             }
             s.about.takeIf { it.isNotBlank() }?.let { InfoRow(it, "О себе") }
             profile?.birthday?.takeIf { it.isNotBlank() }?.let { InfoRow("🎂 " + it, "День рождения") }
-        }
-
-        // ---- three buttons like Telegram ----
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            BigButton(Icons.Filled.Verified, "Premium", Modifier.weight(1f)) { onOpen("premium") }
-            BigButton(Icons.Filled.Person, "Аккаунт", Modifier.weight(1f)) { onOpen("account") }
-            BigButton(Icons.Filled.Edit, "Изменить", Modifier.weight(1f)) { onOpen("edit") }
         }
 
         // ---- Публикации | Подарки ----

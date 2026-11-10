@@ -79,6 +79,8 @@ class SessionStore(private val context: Context) {
         val SWIPE = stringPreferencesKey("swipe_action")
         val ARCHIVED = androidx.datastore.preferences.core.stringSetPreferencesKey("archived")
         val FOLDERS = androidx.datastore.preferences.core.stringPreferencesKey("folders")
+        /** whose the old shared "folders" value is (the account that was here before 4.1.3) */
+        val FOLDERS_OWNER = longPreferencesKey("folders_owner")
         val LANGUAGE = androidx.datastore.preferences.core.stringPreferencesKey("language")
         val PHONE_PRIV = stringPreferencesKey("phone_privacy")
     }
@@ -111,7 +113,8 @@ class SessionStore(private val context: Context) {
             soundChoice = p[Keys.SOUND_CHOICE] ?: "icq",
             swipeAction = p[Keys.SWIPE] ?: "delete",
             archived = p[Keys.ARCHIVED] ?: emptySet(),
-            folders = p[Keys.FOLDERS] ?: "",
+            // folders belong to one account: the second account on this phone has its own
+            folders = p[folderKey(p[Keys.UIN] ?: 0L)] ?: if ((p[Keys.FOLDERS_OWNER] ?: 0L) == 0L) p[Keys.FOLDERS] ?: "" else "",
             language = p[Keys.LANGUAGE] ?: "ru",
             phonePrivacy = p[Keys.PHONE_PRIV] ?: "contacts",
         )
@@ -223,8 +226,21 @@ class SessionStore(private val context: Context) {
     }
 
     suspend fun setFolders(raw: String) {
-        context.dataStore.edit { it[Keys.FOLDERS] = raw }
+        context.dataStore.edit { it[folderKey(it[Keys.UIN] ?: 0L)] = raw }
     }
+
+    /** Before another account comes in: the old shared folders become this account's own. */
+    suspend fun claimFolders(owner: Long = 0L) {
+        context.dataStore.edit {
+            val uin = if (owner != 0L) owner else it[Keys.UIN] ?: 0L
+            if ((it[Keys.FOLDERS_OWNER] ?: 0L) == 0L && uin != 0L) {
+                if (it[folderKey(uin)] == null) it[folderKey(uin)] = it[Keys.FOLDERS] ?: ""
+                it[Keys.FOLDERS_OWNER] = uin
+            }
+        }
+    }
+
+    private fun folderKey(uin: Long) = androidx.datastore.preferences.core.stringPreferencesKey("folders_$uin")
 
     suspend fun setLanguage(code: String) {
         context.dataStore.edit { it[Keys.LANGUAGE] = code }

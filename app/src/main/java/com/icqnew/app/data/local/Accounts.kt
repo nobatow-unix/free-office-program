@@ -58,7 +58,14 @@ object Accounts {
     }
 
     /** Puts the active account (from the session) into the saved list. */
+    /** The folders made before several accounts existed belong to the first account (the one with icq.db). */
+    suspend fun fixLegacyFolders(c: Context, store: SessionStore) {
+        val owner = if (dbName(c) == LEGACY_DB) store.snapshot().uin else saved(c).firstOrNull { it.db == LEGACY_DB }?.uin ?: 0L
+        if (owner != 0L) store.claimFolders(owner)
+    }
+
     suspend fun rememberCurrent(c: Context, store: SessionStore) {
+        fixLegacyFolders(c, store)
         val s = store.snapshot()
         val token = s.token ?: return
         if (s.uin == 0L) return
