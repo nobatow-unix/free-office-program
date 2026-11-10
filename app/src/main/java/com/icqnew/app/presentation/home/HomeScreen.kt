@@ -571,7 +571,9 @@ fun HomeScreen(
                             PremiumPage(vm, onOpenChat)
                         }
                         "account" -> SubPage("Аккаунт", onBack = { profilePage = null }) {
-                            AccountPage(vm, onOpen = { profilePage = it }, onLoggedOut = onLoggedOut)
+                            AccountPage(vm, onOpen = { page ->
+                                if (page == "support") onOpenChat(supportPeer(vm.premium.value)) else profilePage = page
+                            }, onLoggedOut = onLoggedOut)
                         }
                         "edit" -> SubPage("Изменить", onBack = { profilePage = null }) {
                             EditAccountPage(vm, onPickAvatar = { avatarPicker.launch("image/*") }, onDone = { profilePage = null })

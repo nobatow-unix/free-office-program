@@ -324,9 +324,9 @@ class HomeViewModel(
             try {
                 chatRepo.buyPremium(months, group, to)
                 _message.value = when {
-                    group != null -> "Premium для чата подключён ⭐"
+                    group != null -> "Premium для чата подключён ✔"
                     to != null -> "Premium подарен 🎁"
-                    else -> "ICQ Premium подключён ⭐"
+                    else -> "ICQ Premium подключён ✔"
                 }
                 loadPremium()
                 session.value?.uin?.let { loadMyProfile(it) }
@@ -398,7 +398,7 @@ class HomeViewModel(
             val limit = if (_myProfile.value?.premium == true) 10 else 5
             val pinned = chats.value.orEmpty().count { it.pinned && it.peer.uin != peer }
             if (pinned >= limit) {
-                _message.value = if (limit == 5) "Закрепить больше 5 чатов можно с ICQ Premium ⭐" else "Максимум 10 закреплённых чатов"
+                _message.value = if (limit == 5) "Закрепить больше 5 чатов можно с ICQ Premium" else "Максимум 10 закреплённых чатов"
                 return
             }
         }

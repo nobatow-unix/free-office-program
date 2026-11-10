@@ -43,7 +43,7 @@ import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Phone
-import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.filled.SupportAgent
 import androidx.compose.material.icons.filled.Wallpaper
 import androidx.compose.material.icons.filled.Apps
@@ -79,7 +79,6 @@ import com.icqnew.app.data.remote.GiftDto
 import com.icqnew.app.domain.User
 import com.icqnew.app.presentation.appContainer
 import com.icqnew.app.presentation.components.Avatar
-import com.icqnew.app.presentation.components.PremiumStar
 import com.icqnew.app.presentation.emoji.EmojiImage
 import com.icqnew.app.presentation.emoji.EmojiText
 import java.text.SimpleDateFormat
@@ -149,16 +148,16 @@ fun PremiumPage(vm: HomeViewModel, onOpenChat: (Long) -> Unit) {
         val rot by t.animateFloat(-8f, 8f, infiniteRepeatable(tween(1800), RepeatMode.Reverse), label = "r")
         Column(
             Modifier.fillMaxWidth().padding(12.dp).clip(RoundedCornerShape(22.dp))
-                .background(Brush.linearGradient(listOf(Violet, Color(0xFFB45CFF), Gold)))
+                .background(Brush.linearGradient(listOf(Color(0xFF1E88E5), Color(0xFF2AABEE), Color(0xFF7C5CFF))))
                 .padding(vertical = 22.dp, horizontal = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Box(Modifier.graphicsLayer { rotationZ = rot }) {
-                Icon(Icons.Filled.Star, null, tint = Color(0xFFFFE082), modifier = Modifier.size(64.dp))
+                Icon(Icons.Filled.Verified, null, tint = Color.White, modifier = Modifier.size(64.dp))
             }
             Text("ICQ Premium", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
             Text(
-                if (active) "Подключён до ${dateOf(p.premiumUntil)}" else "Больше возможностей и звезда ⭐ у имени",
+                if (active) "Подключён до ${dateOf(p.premiumUntil)}" else "Больше возможностей и синяя галочка у имени",
                 color = Color.White.copy(alpha = 0.9f), fontSize = 14.sp, textAlign = TextAlign.Center,
             )
         }
@@ -168,7 +167,7 @@ fun PremiumPage(vm: HomeViewModel, onOpenChat: (Long) -> Unit) {
                 Icon(Icons.Filled.AccountBalanceWallet, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(28.dp))
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
-                    Text("${p.balance} ${p.currency}", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                    Text("🪙 ${p.balance} ${p.currency}", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Gold)
                     Text("на счёте", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Box(
@@ -180,7 +179,7 @@ fun PremiumPage(vm: HomeViewModel, onOpenChat: (Long) -> Unit) {
         // ---- plans ----
         Card(if (active) "Продлить Premium" else "Подключить Premium") {
             p.plans.forEach { pl ->
-                Row2(Icons.Filled.Star, monthsText(pl.months), "${pl.price} ${p.currency}", onClick = {
+                Row2(Icons.Filled.Verified, monthsText(pl.months), "${pl.price} ${p.currency}", onClick = {
                     buy = Triple(pl.months, pl.price, null)
                 })
             }
@@ -196,7 +195,7 @@ fun PremiumPage(vm: HomeViewModel, onOpenChat: (Long) -> Unit) {
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
-                            when (k.icon) { "wallpaper" -> Icons.Filled.Wallpaper; "limits" -> Icons.Filled.RocketLaunch; "icon" -> Icons.Filled.Apps; else -> Icons.Filled.Star },
+                            when (k.icon) { "wallpaper" -> Icons.Filled.Wallpaper; "limits" -> Icons.Filled.RocketLaunch; "icon" -> Icons.Filled.Apps; else -> Icons.Filled.Verified },
                             null, tint = Violet, modifier = Modifier.size(19.dp),
                         )
                     }
@@ -279,7 +278,7 @@ fun PremiumPage(vm: HomeViewModel, onOpenChat: (Long) -> Unit) {
                     p.myGroups.forEach { g ->
                         Text(
                             (if (g.kind == "channel") "📢 " else "👥 ") + g.name +
-                                if (g.premiumUntil > System.currentTimeMillis()) " ⭐" else "",
+                                if (g.premiumUntil > System.currentTimeMillis()) " ✔" else "",
                             fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 10.dp, bottom = 4.dp),
                         )
                         p.groupPlans.forEach { pl ->
@@ -394,7 +393,7 @@ private fun PeoplePicker(title: String, contacts: List<User>, includeMe: Long?, 
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Box(Modifier.size(36.dp).clip(CircleShape).background(Gold), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Filled.Star, null, tint = Color.White)
+                            Icon(Icons.Filled.Verified, null, tint = Color.White)
                         }
                         Spacer(Modifier.width(10.dp)); Text("Себе", fontWeight = FontWeight.SemiBold)
                     }
@@ -435,9 +434,19 @@ fun AccountPage(vm: HomeViewModel, onOpen: (String) -> Unit, onLoggedOut: () -> 
         }
         Card("ICQ Premium") {
             val until = profile?.premiumUntil ?: 0L
-            Row2(Icons.Filled.Star, if (until > System.currentTimeMillis()) "Подключён" else "Не подключён",
-                if (until > System.currentTimeMillis()) "до ${dateOf(until)}" else null, tint = Gold) { onOpen("premium") }
-            Row2(Icons.Filled.AccountBalanceWallet, "Баланс", "${profile?.balance ?: 0} TMT") { onOpen("premium") }
+            Row2(Icons.Filled.Verified, if (until > System.currentTimeMillis()) "Подключён" else "Не подключён",
+                if (until > System.currentTimeMillis()) "до ${dateOf(until)}" else null, tint = com.icqnew.app.presentation.components.BotBlue) { onOpen("premium") }
+            Row2(Icons.Filled.AccountBalanceWallet, "Баланс", "🪙 ${profile?.balance ?: 0} Gold") { onOpen("premium") }
+        }
+        Card("Галочки") {
+            Text(
+                "Синяя галочка — у пользователей ICQ Premium. Зелёная — у официальных аккаунтов и каналов: " +
+                    "её выдаёт администратор после проверки.",
+                fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(14.dp, 8.dp),
+            )
+            Row2(Icons.Filled.Verified, "Получить зелёную галочку", "написать администратору", tint = Color(0xFF22C55E)) {
+                onOpen("support")
+            }
         }
         Card("Активные сеансы") {
             sessions.forEach { d ->
@@ -533,7 +542,7 @@ fun EditAccountPage(vm: HomeViewModel, onPickAvatar: () -> Unit, onDone: () -> U
                         Modifier.size(30.dp).clip(CircleShape)
                             .background(c ?: MaterialTheme.colorScheme.surfaceContainerHighest)
                             .border(if (color == i) 3.dp else 0.dp, MaterialTheme.colorScheme.onSurface, CircleShape)
-                            .clickable { if (locked) hint = "Этот цвет — с ICQ Premium ⭐" else color = i },
+                            .clickable { if (locked) hint = "Этот цвет — с ICQ Premium" else color = i },
                         contentAlignment = Alignment.Center,
                     ) {
                         when {

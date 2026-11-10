@@ -103,7 +103,7 @@ fun AppIconDialog(premium: Boolean, onDismiss: () -> Unit) {
                         val locked = i > 0 && !premium
                         Column(
                             Modifier.clip(RoundedCornerShape(12.dp)).clickable {
-                                if (locked) Toast.makeText(context, "Этот значок — с ICQ Premium ⭐", Toast.LENGTH_SHORT).show()
+                                if (locked) Toast.makeText(context, "Этот значок — с ICQ Premium", Toast.LENGTH_SHORT).show()
                                 else { AppIcons.set(context, ic.alias); current = ic.alias }
                             }.padding(4.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
@@ -170,7 +170,7 @@ fun FoldersDialog(vm: HomeViewModel, folders: List<ChatFolder>, premium: Boolean
                 }
                 TextButton(onClick = {
                     if (folders.size >= limit) Toast.makeText(
-                        context, if (premium) "Максимум ${ChatFolder.PREMIUM_LIMIT} папок" else "Больше папок — с ICQ Premium ⭐", Toast.LENGTH_SHORT,
+                        context, if (premium) "Максимум ${ChatFolder.PREMIUM_LIMIT} папок" else "Больше папок — с ICQ Premium", Toast.LENGTH_SHORT,
                     ).show()
                     else editing = -1 to ChatFolder("", emptySet())
                 }) {

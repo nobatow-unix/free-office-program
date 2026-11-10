@@ -31,7 +31,7 @@ data class User(
     val channelAvatar: String? = null,
     /** "Saved messages" — the chat with yourself */
     val isSelf: Boolean = false,
-    /** ICQ Premium: ⭐ next to the name, coloured name, more features */
+    /** ICQ Premium: blue tick next to the name, more colours and features */
     val premium: Boolean = false,
     val surname: String = "",
     val email: String = "",
@@ -339,7 +339,7 @@ data class ContactCard(
 object GiftCatalog {
     private val all = mapOf(
         "rose" to ("🌹" to "Роза"), "teddy" to ("🧸" to "Мишка"), "cake" to ("🎂" to "Торт"),
-        "heart" to ("💝" to "Сердце"), "gift" to ("🎁" to "Сюрприз"), "star" to ("⭐" to "Звезда"),
+        "heart" to ("💝" to "Сердце"), "gift" to ("🎁" to "Сюрприз"), "clover" to ("🍀" to "Удача"),
         "diamond" to ("💎" to "Бриллиант"), "crown" to ("👑" to "Корона"), "rocket" to ("🚀" to "Ракета"),
     )
 

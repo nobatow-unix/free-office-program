@@ -20,7 +20,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Verified
@@ -266,8 +265,8 @@ val VerifiedGreen = Color(0xFF00C853)
 
 @Composable
 fun VerifiedBadge(size: Dp = 16.dp, modifier: Modifier = Modifier, bot: Boolean = false) {
-    // bots get a blue tick, people / channels a green one
-    Icon(Icons.Filled.Verified, if (bot) "Бот" else "Подтверждено", tint = if (bot) BotBlue else VerifiedGreen, modifier = modifier.size(size))
+    // blue tick: bots and ICQ Premium; green tick: official / verified accounts and channels
+    Icon(Icons.Filled.Verified, if (bot) "Premium" else "Подтверждено", tint = if (bot) BotBlue else VerifiedGreen, modifier = modifier.size(size))
 }
 
 val BotBlue = Color(0xFF2AABEE)
@@ -289,33 +288,15 @@ fun NameLine(
             name, fontSize = fontSize, fontWeight = fontWeight, color = color, maxLines = 1,
             overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false),
         )
-        if (verified || bot) {
+        // green tick = official / verified by the admin; blue tick = ICQ Premium (and bots)
+        if (verified || bot || premium) {
             Spacer(Modifier.width(4.dp))
-            VerifiedBadge(if (fontSize.isSp && fontSize.value > 20) 20.dp else 16.dp, bot = bot)
-        }
-        if (premium && !bot) {
-            Spacer(Modifier.width(4.dp))
-            PremiumStar(if (fontSize.isSp && fontSize.value > 20) 20.dp else 16.dp)
+            VerifiedBadge(
+                if (fontSize.isSp && fontSize.value > 20) 20.dp else 16.dp,
+                bot = bot || (premium && !verified),
+            )
         }
     }
-}
-
-/** ICQ Premium: a golden star with a soft shine. */
-@Composable
-fun PremiumStar(size: androidx.compose.ui.unit.Dp = 16.dp) {
-    val t = androidx.compose.animation.core.rememberInfiniteTransition(label = "star")
-    val glow by t.animateFloat(
-        0.75f, 1f,
-        androidx.compose.animation.core.infiniteRepeatable(
-            androidx.compose.animation.core.tween(1400), androidx.compose.animation.core.RepeatMode.Reverse,
-        ),
-        label = "glow",
-    )
-    Icon(
-        Icons.Filled.Star, "Premium",
-        tint = androidx.compose.ui.graphics.lerp(Color(0xFFFFB300), Color(0xFFFFE082), 1f - glow),
-        modifier = Modifier.size(size).graphicsLayer { scaleX = glow * 0.12f + 0.9f; scaleY = glow * 0.12f + 0.9f },
-    )
 }
 
 /** Three bouncing dots — the animated "печатает…" indicator. */

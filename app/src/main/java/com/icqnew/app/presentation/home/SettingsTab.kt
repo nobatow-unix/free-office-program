@@ -265,7 +265,7 @@ fun SettingsTab(
                     val locked = i > 2 && !premium
                     Box(
                         Modifier.size(34.dp).clip(CircleShape).background(color).clickable {
-                            if (locked) Toast.makeText(context, "Этот цвет — с ICQ Premium ⭐", Toast.LENGTH_SHORT).show()
+                            if (locked) Toast.makeText(context, "Этот цвет — с ICQ Premium", Toast.LENGTH_SHORT).show()
                             else vm.setAccent(i)
                         },
                         contentAlignment = Alignment.Center,

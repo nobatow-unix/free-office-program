@@ -692,7 +692,7 @@ class ChatRepositoryImpl(
                 ContactEntity(
                     uin = groupPeer(g.id), name = g.name, avatarUrl = g.avatarUrl, online = false, lastSeen = 0,
                     about = g.about, isGroup = true, members = g.count, owner = g.owner, kind = g.kind,
-                    isPublic = g.public, username = g.username, verified = g.verified,
+                    isPublic = g.public, username = g.username, verified = g.verified, premium = g.premium,
                     settings = settingsJson.encodeToString(GroupSettingsDto.serializer(), g.settings),
                     botName = g.botName, botAvatar = g.botAvatar,
                 )

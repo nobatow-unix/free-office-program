@@ -18,8 +18,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.filled.SupportAgent
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bookmark
@@ -127,10 +127,7 @@ fun MyProfileTab(
                     listOfNotNull(s.name, profile?.surname?.ifBlank { null }).joinToString(" "),
                     verified = s.verified, fontSize = 22.sp, premium = profile?.premium == true,
                 )
-                Text(
-                    if (profile?.premium == true) "ICQ Premium ⭐" else "в сети",
-                    color = if (profile?.premium == true) Color(0xFFFFB300) else MaterialTheme.colorScheme.primary, fontSize = 14.sp,
-                )
+                Text("в сети", color = MaterialTheme.colorScheme.primary, fontSize = 14.sp)
             }
             // settings: top right
             IconButton(
@@ -144,7 +141,7 @@ fun MyProfileTab(
             Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            BigButton(Icons.Filled.Star, "Premium", Modifier.weight(1f)) { onOpen("premium") }
+            BigButton(Icons.Filled.Verified, "Premium", Modifier.weight(1f)) { onOpen("premium") }
             BigButton(Icons.Filled.Person, "Аккаунт", Modifier.weight(1f)) { onOpen("account") }
             BigButton(Icons.Filled.Edit, "Изменить", Modifier.weight(1f)) { onOpen("edit") }
         }

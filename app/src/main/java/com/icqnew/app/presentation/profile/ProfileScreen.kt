@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -264,6 +265,33 @@ fun ProfileScreen(uin: Long, onBack: () -> Unit, onOpenChat: () -> Unit, onOpenC
                         leadingContent = { Avatar(u.channelName, -u.channelId, u.channelAvatar, false, 44.dp, isChannel = true) },
                         headlineContent = { com.icqnew.app.presentation.emoji.EmojiText(u.channelName, maxLines = 1, fontSize = 17.sp) },
                         trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
+                    )
+                    HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+                }
+                // gifts this person received
+                val gifts by produceState(emptyList<com.icqnew.app.data.remote.UserGiftDto>(), uin) {
+                    value = runCatching { container.chatRepository.userGifts(uin) }.getOrDefault(emptyList())
+                }
+                if (gifts.isNotEmpty()) {
+                    ListItem(
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                        overlineContent = { Text("Подарки · ${gifts.size}") },
+                        headlineContent = {
+                            Row(
+                                Modifier.horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                gifts.take(20).forEach { g ->
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        com.icqnew.app.presentation.emoji.EmojiImage(g.gift.emoji, 34.dp)
+                                        Text(
+                                            g.from?.name?.take(10) ?: "аноним", fontSize = 10.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
+                                        )
+                                    }
+                                }
+                            }
+                        },
                     )
                     HorizontalDivider(Modifier.padding(horizontal = 16.dp))
                 }

@@ -147,7 +147,7 @@ fun WallpaperPicker(
     premium: Boolean = true,
 ) {
     val context = LocalContext.current
-    fun locked() = android.widget.Toast.makeText(context, "Этот фон — с ICQ Premium ⭐", android.widget.Toast.LENGTH_SHORT).show()
+    fun locked() = android.widget.Toast.makeText(context, "Этот фон — с ICQ Premium", android.widget.Toast.LENGTH_SHORT).show()
     val scope = rememberCoroutineScope()
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) scope.launch {

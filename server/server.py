@@ -47,7 +47,7 @@ UPLOAD_DIR = os.environ.get("ICQ_UPLOADS", "uploads")
 MAX_UPLOAD = 4 * 1024 * 1024 * 1024  # 4 GB (Premium)
 FREE_UPLOAD = 2 * 1024 * 1024 * 1024  # 2 GB without Premium
 
-# ---- Premium (prices in manats; the admin tops balances up in the admin panel) ----
+# ---- Premium (prices in Gold, the in-app coins; the admin tops balances up in the admin panel) ----
 PREMIUM_PLANS = [  # months, price
     {"months": 1, "price": int(os.environ.get("ICQ_PREMIUM_1", "30"))},
     {"months": 3, "price": int(os.environ.get("ICQ_PREMIUM_3", "80"))},
@@ -63,7 +63,7 @@ GIFTS = [  # id, picture (emoji), name, price
     {"id": "cake", "emoji": "🎂", "name": "Торт", "price": 10},
     {"id": "heart", "emoji": "💝", "name": "Сердце", "price": 15},
     {"id": "gift", "emoji": "🎁", "name": "Сюрприз", "price": 20},
-    {"id": "star", "emoji": "⭐", "name": "Звезда", "price": 25},
+    {"id": "clover", "emoji": "🍀", "name": "Удача", "price": 25},
     {"id": "diamond", "emoji": "💎", "name": "Бриллиант", "price": 50},
     {"id": "crown", "emoji": "👑", "name": "Корона", "price": 100},
     {"id": "rocket", "emoji": "🚀", "name": "Ракета", "price": 150},
@@ -71,7 +71,7 @@ GIFTS = [  # id, picture (emoji), name, price
 GIFT_BY_ID = {g["id"]: g for g in GIFTS}
 PREMIUM_PERKS = [
     {"icon": "wallpaper", "title": "Фоны и темы чатов", "text": "Все фоны, цветовые темы оформления"},
-    {"icon": "star", "title": "Звезда и цветное имя", "text": "Значок ⭐ рядом с именем, цвет имени и профиля"},
+    {"icon": "tick", "title": "Синяя галочка", "text": "Синяя галочка у имени (зелёная — у официальных, её выдаёт администратор) и цвета профиля"},
     {"icon": "limits", "title": "Больше возможностей", "text": "Файлы до 4 ГБ, 10 папок чатов, 10 закреплённых чатов"},
     {"icon": "icon", "title": "Значок приложения", "text": "Другие значки ICQ на главном экране"},
 ]
@@ -1250,7 +1250,7 @@ async def update_me(body: ProfileIn, authorization: Optional[str] = Header(None)
         if body.color is not None:
             col = max(0, min(8, body.color))
             if col > 4 and not is_premium(c, uin):
-                raise HTTPException(402, "Этот цвет доступен с ICQ Premium ⭐")
+                raise HTTPException(402, "Этот цвет доступен с ICQ Premium")
             c.execute("UPDATE users SET color=? WHERE uin=?", (col, uin))
         if body.surname is not None:
             c.execute("UPDATE users SET surname=? WHERE uin=?", (body.surname.strip() or None, uin))
@@ -1862,6 +1862,7 @@ def group_json(c: sqlite3.Connection, g: sqlite3.Row, with_members: bool = True,
         "public": bool(g["public"]),
         "username": g["username"],
         "verified": bool(g["verified"]),
+        "premium": (_col(g, "premium_until", 0) or 0) > now_ms(),
         "settings": group_settings(g),
         "bot_name": g["bot_name"] or "ICQ Бот",
         "bot_avatar": g["bot_avatar"],
@@ -1997,7 +1998,7 @@ def _charge(c: sqlite3.Connection, uin: int, price: int, reason: str) -> int:
     """Takes money from the balance (raises 402 when it is not enough). Returns the new balance."""
     bal = c.execute("SELECT balance FROM users WHERE uin=?", (uin,)).fetchone()["balance"] or 0
     if bal < price:
-        raise HTTPException(402, f"Недостаточно средств: нужно {price} TMT, на балансе {bal} TMT")
+        raise HTTPException(402, f"Недостаточно средств: нужно {price} Gold, на балансе {bal} Gold")
     c.execute("UPDATE users SET balance=balance-? WHERE uin=?", (price, uin))
     c.execute("INSERT INTO balance_log(uin, delta, reason, ts) VALUES(?,?,?,?)", (uin, -price, reason[:200], now_ms()))
     return bal - price
@@ -2014,7 +2015,7 @@ def premium_info(authorization: Optional[str] = Header(None)) -> dict:
             " WHERE m.uin=? AND (g.owner=? OR m.role IN ('owner','admin')) ORDER BY g.name", (uin, uin),
         ).fetchall()
     return {
-        "balance": u["balance"] or 0, "premium_until": u["premium_until"] or 0, "currency": "TMT",
+        "balance": u["balance"] or 0, "premium_until": u["premium_until"] or 0, "currency": "Gold",
         "plans": PREMIUM_PLANS, "group_plans": GROUP_PLANS, "gifts": GIFTS, "perks": PREMIUM_PERKS,
         "history": [{"delta": r["delta"], "reason": r["reason"], "ts": r["ts"]} for r in log],
         "my_groups": [{"id": g["id"], "name": g["name"], "kind": g["kind"], "premium_until": g["premium_until"] or 0}
@@ -2060,7 +2061,7 @@ async def premium_buy(body: BuyPremiumIn, authorization: Optional[str] = Header(
             c.execute("UPDATE users SET premium_until=? WHERE uin=?", (until, target))
             if target != uin:
                 me = c.execute("SELECT name FROM users WHERE uin=?", (uin,)).fetchone()["name"]
-                note = (target, f"🎁 {me} подарил(а) вам **ICQ Premium** на {body.months} мес. ⭐")
+                note = (target, f"🎁 {me} подарил(а) вам **ICQ Premium** на {body.months} мес. Теперь у вас синяя галочка ✔")
     if note:
         asyncio.create_task(service_send(*note))
     return {"balance": bal, "until": until}
@@ -3187,7 +3188,7 @@ async def admin_balance(body: dict, _: None = Depends(require_admin)) -> dict:
                   (u["uin"], amount, (body.get("reason") or "Пополнение (администратор)")[:200], now_ms()))
         uin, name = u["uin"], u["name"]
     if amount > 0:
-        asyncio.create_task(service_send(uin, f"💰 Ваш баланс пополнен на **{amount} TMT**. Сейчас: {new} TMT."))
+        asyncio.create_task(service_send(uin, f"💰 Ваш баланс пополнен на **{amount} Gold**. Сейчас: {new} Gold."))
     return {"uin": uin, "name": name, "balance": new}
 
 
@@ -3357,7 +3358,7 @@ input{width:100%;padding:10px 12px;border:1px solid #d5d9d7;border-radius:10px;f
 <div id="codes"></div>
 <div id="balance" style="display:none">
 <p style="opacity:.8">Пополнение баланса (Premium, подарки). Пользователь получит уведомление от «ICQ». Отрицательная сумма — списание.</p>
-<input id="bwho" placeholder="ID, телефон или @username"> <input id="bamt" type="number" placeholder="Сумма, TMT" style="width:120px">
+<input id="bwho" placeholder="ID, телефон или @username"> <input id="bamt" type="number" placeholder="Сумма, Gold" style="width:120px">
 <input id="breason" placeholder="Комментарий (необязательно)"> <button onclick="topUp()">Зачислить</button>
 <div id="bres" style="margin:10px 0;font-weight:bold"></div><div id="blog"></div></div>
 <div id="users" style="display:none"><input id="q" placeholder="Поиск: имя, телефон, @username или ID" oninput="loadUsers()"><div id="ulist"></div></div>
@@ -3385,9 +3386,9 @@ v.onclick=function(){fetch('/admin/api/verify',{method:'POST',headers:{'Content-
 function loadGroups(){var q=document.getElementById('gq').value;fetch('/admin/api/groups?q='+encodeURIComponent(q)).then(function(r){return r.json()}).then(function(list){var l=document.getElementById('glist');l.innerHTML='';if(!list.length){l.appendChild(el('div','empty','Ничего нет'));return}list.forEach(function(g){l.appendChild(grow(g))})})}
 function topUp(){var b={who:document.getElementById('bwho').value,amount:parseInt(document.getElementById('bamt').value||'0'),reason:document.getElementById('breason').value};
 fetch('/admin/api/balance',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(function(r){return r.json().then(function(j){return [r.ok,j]})}).then(function(x){var e=document.getElementById('bres');
-if(x[0]){e.textContent='✅ '+x[1].name+': баланс '+x[1].balance+' TMT';document.getElementById('bamt').value='';loadBal()}else{e.textContent='❌ '+(x[1].detail||'Ошибка')}})}
+if(x[0]){e.textContent='✅ '+x[1].name+': баланс '+x[1].balance+' Gold';document.getElementById('bamt').value='';loadBal()}else{e.textContent='❌ '+(x[1].detail||'Ошибка')}})}
 function loadBal(){fetch('/admin/api/balance').then(function(r){return r.json()}).then(function(list){var l=document.getElementById('blog');l.innerHTML='';
-list.forEach(function(it){var d=el('div','row');d.appendChild(el('div','phone',(it.delta>0?'+':'')+it.delta+' TMT · '+(it.name||it.uin)));d.appendChild(el('div','',it.reason+' · '+fmt(it.ts)));l.appendChild(d)})})}
+list.forEach(function(it){var d=el('div','row');d.appendChild(el('div','phone',(it.delta>0?'+':'')+it.delta+' Gold · '+(it.name||it.uin)));d.appendChild(el('div','',it.reason+' · '+fmt(it.ts)));l.appendChild(d)})})}
 function el(t,c,txt){var e=document.createElement(t);if(c)e.className=c;if(txt!=null)e.textContent=txt;return e}
 function row(it){
   var d=el('div','row'+(it.sent?' sent':'')+(it.expired?' expired':''));

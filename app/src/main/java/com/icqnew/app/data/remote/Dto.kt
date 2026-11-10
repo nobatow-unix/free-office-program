@@ -98,6 +98,8 @@ data class GroupDto(
     val member: Boolean = true,
     val username: String? = null,
     val verified: Boolean = false,
+    /** Premium for the channel / group: blue tick */
+    val premium: Boolean = false,
     val settings: GroupSettingsDto = GroupSettingsDto(),
     @SerialName("bot_name") val botName: String = "ICQ Бот",
     @SerialName("bot_avatar") val botAvatar: String? = null,
