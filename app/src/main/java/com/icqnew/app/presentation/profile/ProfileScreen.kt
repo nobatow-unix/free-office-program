@@ -220,7 +220,7 @@ fun ProfileScreen(uin: Long, onBack: () -> Unit, onOpenChat: () -> Unit, onOpenC
             }
             if (storyGroup != null) {
                 Text(
-                    if (storyGroup.allSeen) "История · нажмите на фото" else "Новая история · нажмите на фото",
+                    if (storyGroup.allSeen) "Публикация · нажмите на фото" else "Новая публикация · нажмите на фото",
                     fontSize = 12.sp, color = com.icqnew.app.presentation.theme.IcqGreen,
                     modifier = Modifier.padding(top = 4.dp),
                 )

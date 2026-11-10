@@ -62,7 +62,7 @@ class AppContainer(private val context: Context) {
     }
 
     private val db = Room.databaseBuilder(context, IcqDatabase::class.java, "icq.db")
-        .addMigrations(com.icqnew.app.data.local.MIGRATION_6_7, com.icqnew.app.data.local.MIGRATION_7_8)
+        .addMigrations(com.icqnew.app.data.local.MIGRATION_6_7, com.icqnew.app.data.local.MIGRATION_7_8, com.icqnew.app.data.local.MIGRATION_8_9)
         .fallbackToDestructiveMigration()
         .build()
     private val api = IcqApi(httpClient, store)

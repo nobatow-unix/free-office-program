@@ -65,6 +65,8 @@ class IcqApi(private val client: HttpClient, private val store: SessionStore) {
 
     suspend fun storyComments(id: Long): List<StoryCommentDto> = get("/api/stories/$id/comments")
 
+    suspend fun replyStory(id: Long, text: String): MessageDto = post("/api/stories/$id/reply", StoryCommentRequest(text))
+
     suspend fun addStoryComment(id: Long, text: String): StoryCommentDto =
         post("/api/stories/$id/comments", StoryCommentRequest(text))
 
@@ -189,7 +191,7 @@ class IcqApi(private val client: HttpClient, private val store: SessionStore) {
 
     suspend fun pollVoters(mid: Long): List<PollVoterDto> = get("/api/polls/$mid/voters")
 
-    suspend fun publicPosts(gid: Long): List<MessageDto> = get("/api/groups/$gid/posts", mapOf("limit" to "5"))
+    suspend fun publicPosts(gid: Long, limit: Int = 5): List<MessageDto> = get("/api/groups/$gid/posts", mapOf("limit" to limit.toString()))
 
     suspend fun groupLog(gid: Long): List<GroupLogDto> = get("/api/groups/$gid/log")
 

@@ -133,6 +133,8 @@ data class MessageEntity(
     val views: Int = 0,
     /** PollDto as JSON */
     val poll: String? = null,
+    /** picture of the publication this message answers ("" = answer without picture) */
+    val storyAtt: String? = null,
 )
 
 /** Result row of the chat-list query (peer + last message + unread count + local options). */
@@ -339,18 +341,19 @@ interface MessageDao {
     @Query(
         """
         SELECT c.uin AS uin, c.name AS name, c.avatarUrl AS avatarUrl, c.online AS online,
-               c.lastSeen AS lastSeen, c.about AS about, c.isGroup AS isGroup, c.kind AS kind, c.members AS members, c.verified AS verified, m.status AS lastStatus,
-               m.text AS lastText, m.kind AS lastKind, m.ts AS lastTs,
-               m.fromMe AS lastFromMe, m.deleted AS lastDeleted, m.attName AS lastAttName,
+               c.lastSeen AS lastSeen, c.about AS about, c.isGroup AS isGroup, c.kind AS kind, c.members AS members, c.verified AS verified, COALESCE(m.status, 1) AS lastStatus,
+               COALESCE(m.text, '') AS lastText, COALESCE(m.kind, 'system') AS lastKind, COALESCE(m.ts, 0) AS lastTs,
+               COALESCE(m.fromMe, 0) AS lastFromMe, COALESCE(m.deleted, 0) AS lastDeleted, m.attName AS lastAttName,
                (SELECT g.name FROM members g WHERE g.gid = -c.uin AND g.uin = m.fromUin) AS lastSender,
                (SELECT COUNT(*) FROM messages u
                  WHERE u.peerUin = c.uin AND u.fromMe = 0 AND u.isRead = 0) AS unread,
                COALESCE(p.pinned, 0) AS pinned, COALESCE(p.muted, 0) AS muted
         FROM contacts c
-        JOIN messages m ON m.id = (
+        LEFT JOIN messages m ON m.id = (
             SELECT x.id FROM messages x WHERE x.peerUin = c.uin ORDER BY x.ts DESC, x.id DESC LIMIT 1)
         LEFT JOIN prefs p ON p.peer = c.uin
-        ORDER BY COALESCE(p.pinned, 0) DESC, m.ts DESC
+        WHERE m.id IS NOT NULL OR c.isGroup = 1  -- a just-joined channel shows up even before its posts arrive
+        ORDER BY COALESCE(p.pinned, 0) DESC, COALESCE(m.ts, 0) DESC
         """
     )
     fun observeChats(): Flow<List<ChatRow>>
@@ -361,7 +364,7 @@ interface MessageDao {
         ContactEntity::class, MessageEntity::class, MemberEntity::class, ChatPrefEntity::class, KvEntity::class,
         CallEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = false,
 )
 abstract class IcqDatabase : RoomDatabase() {
@@ -375,6 +378,12 @@ abstract class IcqDatabase : RoomDatabase() {
 
 
 /** 6 -> 7: members got @username (for @mentions). Keeps all messages on the phone. */
+val MIGRATION_8_9 = object : androidx.room.migration.Migration(8, 9) {
+    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE messages ADD COLUMN storyAtt TEXT")
+    }
+}
+
 val MIGRATION_7_8 = object : androidx.room.migration.Migration(7, 8) {
     override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE messages ADD COLUMN views INTEGER NOT NULL DEFAULT 0")

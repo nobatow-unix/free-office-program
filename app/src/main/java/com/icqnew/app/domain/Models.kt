@@ -92,6 +92,10 @@ data class ChatMessage(
     /** channel posts: how many people saw it */
     val views: Int = 0,
     val poll: Poll? = null,
+    /** answers a publication: its picture id ("" = no picture), null = ordinary message */
+    val storyAtt: String? = null,
+    /** I have seen it (incoming messages) */
+    val isRead: Boolean = true,
 )
 
 data class PollOption(val text: String, val votes: Int)

@@ -164,7 +164,7 @@ fun MyProfileTab(
 
         // ---- my stories ----
         Text(
-            "Мои истории", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 14.sp,
+            "Мои публикации", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 14.sp,
             modifier = Modifier.padding(start = 24.dp, top = 14.dp, bottom = 6.dp),
         )
         LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {

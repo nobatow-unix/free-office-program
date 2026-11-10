@@ -405,6 +405,9 @@ class ChatViewModel(
         return media.file(id, m.attName ?: "image")
     }
 
+    /** Picture of a publication quoted in an answer. */
+    suspend fun storyFile(attId: String): File? = runCatching { media.file(attId, "story_$attId.jpg") }.getOrNull()
+
     suspend fun streamSource(m: ChatMessage): Pair<String, Map<String, String>>? {
         m.localPath?.let { p -> if (File(p).exists()) return ("file://" + p) to emptyMap() }
         return m.attId?.let { media.streamSource(it) }

@@ -96,9 +96,9 @@ class HomeViewModel(
                 val f = java.io.File(dir, "story_${System.currentTimeMillis()}.jpg")
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { f.writeBytes(jpeg) }
                 chatRepo.postStory(f, text)
-                _message.value = "История опубликована"
+                _message.value = "Публикация готова"
             } catch (e: Exception) {
-                _message.value = "Не удалось опубликовать историю"
+                _message.value = "Не удалось опубликовать"
             }
         }
     }

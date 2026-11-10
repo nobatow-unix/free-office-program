@@ -81,7 +81,7 @@ fun StoriesRow(
                     ) { Icon(Icons.Filled.Add, "Добавить", tint = Color.White, modifier = Modifier.size(14.dp)) }
                 }
                 Spacer(Modifier.height(4.dp))
-                Text("Моя история", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("Моя публикация", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
         itemsIndexed(groups) { i, g ->
@@ -211,7 +211,7 @@ fun StoryViewer(groups: List<StoryGroup>, start: Int, myUin: Long, onClose: () -
                     Avatar(group.user.name, group.user.uin, group.user.avatarUrl, false, 38.dp, storyRing = false)
                     Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
-                        NameLine(if (mine) "Моя история" else group.user.name, group.user.verified, color = Color.White, fontSize = 15.sp)
+                        NameLine(if (mine) "Моя публикация" else group.user.name, group.user.verified, color = Color.White, fontSize = 15.sp)
                         Text(formatListTime(story.ts), color = Color.White.copy(alpha = 0.75f), fontSize = 12.sp)
                     }
                     if (mine) {
@@ -225,7 +225,7 @@ fun StoryViewer(groups: List<StoryGroup>, start: Int, myUin: Long, onClose: () -
                     IconButton(onClick = {
                         // share the picture itself + a link to the author
                         val f = file
-                        val text = "История " + group.user.name + " в ICQ New" +
+                        val text = "Публикация " + group.user.name + " в ICQ New" +
                             (group.user.username?.takeIf { it.isNotBlank() }?.let { "\n" + com.icqnew.app.presentation.IcqLinks.user(it) } ?: "")
                         val send = android.content.Intent(android.content.Intent.ACTION_SEND).putExtra(android.content.Intent.EXTRA_TEXT, text)
                         if (f != null) {
@@ -235,7 +235,7 @@ fun StoryViewer(groups: List<StoryGroup>, start: Int, myUin: Long, onClose: () -
                                     .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
                             }.onFailure { send.setType("text/plain") }
                         } else send.setType("text/plain")
-                        context.startActivity(android.content.Intent.createChooser(send, "Поделиться историей"))
+                        context.startActivity(android.content.Intent.createChooser(send, "Поделиться публикацией"))
                     }) { Icon(Icons.Filled.Share, "Поделиться", tint = Color.White) }
                     IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "Закрыть", tint = Color.White) }
                 }
@@ -276,15 +276,18 @@ fun StoryViewer(groups: List<StoryGroup>, start: Int, myUin: Long, onClose: () -
                     }
                 }
                 Spacer(Modifier.height(10.dp))
-                StoryCommentBar(
-                    count = story.comments,
-                    canWrite = !mine,
-                    onOpen = { commentsOpen = true },
+                // the answer goes privately to the author's chat, quoting this publication (like Telegram)
+                if (!mine) StoryCommentBar(
                     onTyping = { typing = it },
                     onSend = { text ->
                         scope.launch {
-                            runCatching { container.chatRepository.addStoryComment(story.id, text) }
-                                .onSuccess { android.widget.Toast.makeText(context, "Комментарий отправлен", android.widget.Toast.LENGTH_SHORT).show() }
+                            runCatching { container.chatRepository.replyStory(story.id, text) }
+                                .onSuccess {
+                                    android.widget.Toast.makeText(context, "Ответ отправлен в личные сообщения", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                                .onFailure {
+                                    android.widget.Toast.makeText(context, it.message ?: "Не удалось отправить", android.widget.Toast.LENGTH_SHORT).show()
+                                }
                         }
                     },
                 )
@@ -363,7 +366,7 @@ fun StoryCaptionDialog(onPost: (String) -> Unit, onCancel: () -> Unit) {
     var text by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onCancel,
-        title = { Text("Новая история") },
+        title = { Text("Новая публикация") },
         text = {
             Column {
                 OutlinedTextField(
@@ -371,7 +374,7 @@ fun StoryCaptionDialog(onPost: (String) -> Unit, onCancel: () -> Unit) {
                     label = { Text("Подпись (необязательно)") },
                 )
                 Spacer(Modifier.height(6.dp))
-                Text("История видна вашим контактам 24 часа.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Публикация видна вашим контактам 24 часа.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         },
         confirmButton = { TextButton(onClick = { onPost(text) }) { Text("Опубликовать") } },
@@ -383,15 +386,12 @@ fun StoryCaptionDialog(onPost: (String) -> Unit, onCancel: () -> Unit) {
 /** Bottom bar of a story: "write a comment" field (other people's stories) and the 💬 counter. */
 @Composable
 private fun StoryCommentBar(
-    count: Int,
-    canWrite: Boolean,
-    onOpen: () -> Unit,
     onTyping: (Boolean) -> Unit,
     onSend: (String) -> Unit,
 ) {
     var text by remember { mutableStateOf("") }
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-        if (canWrite) {
+        run {
             androidx.compose.foundation.text.BasicTextField(
                 value = text,
                 onValueChange = { text = it.take(500); onTyping(it.isNotEmpty()) },
@@ -402,7 +402,7 @@ private fun StoryCommentBar(
                     .border(1.dp, Color.White.copy(alpha = 0.6f), RoundedCornerShape(22.dp)),
                 decorationBox = { inner ->
                     Box(Modifier.padding(horizontal = 16.dp), contentAlignment = Alignment.CenterStart) {
-                        if (text.isEmpty()) Text("Комментарий…", color = Color.White.copy(alpha = 0.7f), fontSize = 15.sp)
+                        if (text.isEmpty()) Text("Ответить…", color = Color.White.copy(alpha = 0.7f), fontSize = 15.sp)
                         inner()
                     }
                 },
@@ -413,20 +413,6 @@ private fun StoryCommentBar(
                     onClick = { onSend(text.trim()); text = ""; onTyping(false) },
                     modifier = Modifier.size(44.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary),
                 ) { Icon(Icons.AutoMirrored.Filled.Send, "Отправить", tint = Color.White) }
-            }
-            Spacer(Modifier.width(8.dp))
-        } else {
-            Spacer(Modifier.weight(1f))
-        }
-        Row(
-            Modifier.clip(RoundedCornerShape(22.dp)).background(Color.White.copy(alpha = 0.15f)).clickable(onClick = onOpen)
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(Icons.AutoMirrored.Filled.Comment, "Комментарии", tint = Color.White, modifier = Modifier.size(20.dp))
-            if (count > 0) {
-                Spacer(Modifier.width(6.dp))
-                Text(count.toString(), color = Color.White, fontWeight = FontWeight.Bold)
             }
         }
     }

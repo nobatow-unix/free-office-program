@@ -254,6 +254,9 @@ def init_db() -> None:
         # auto-delete timers
         _add_column(c, "messages", "expire_at INTEGER NOT NULL DEFAULT 0")
         _add_column(c, "groups", "ttl INTEGER NOT NULL DEFAULT 0")
+        # a private message that answers a publication (story): which one, and its picture
+        _add_column(c, "messages", "story_id INTEGER")
+        _add_column(c, "messages", "story_att TEXT")
         # personal auto-delete default (applies to private chats without their own timer, and to new groups)
         _add_column(c, "users", f"default_ttl INTEGER NOT NULL DEFAULT {DEFAULT_TTL}")
         c.executescript(
@@ -290,6 +293,15 @@ def init_db() -> None:
             " VALUES(?, 'ICQ Бот', 'bot', 'bot', 'Официальный бот ICQ New. Напишите /help', 1, 'icqbot', ?, ?)",
             (BOT_UIN, int(time.time() * 1000), int(time.time() * 1000)),
         )
+        if not c.execute("SELECT 1 FROM groups WHERE username=?", ("icqcommunity",)).fetchone():
+            now0 = int(time.time() * 1000)
+            cur0 = c.execute(
+                "INSERT INTO groups(name, owner, created, kind, about, public, verified, username)"
+                " VALUES('ICQ Community', ?, ?, 'group', ?, 1, 1, 'icqcommunity')",
+                (BOT_UIN, now0, "Официальный общий чат ICQ New: новости, вопросы, идеи. Будьте вежливы 🙂"),
+            )
+            c.execute("INSERT OR IGNORE INTO group_members(gid, uin, joined, role) VALUES(?,?,?,'owner')",
+                      (cur0.lastrowid, BOT_UIN, now0))
         c.execute(
             "INSERT OR IGNORE INTO users(uin, name, phone, phone_key, about, verified, username, created, last_seen)"
             " VALUES(?, 'ICQ', 'service', 'service', 'Служебные уведомления: коды входа и новые устройства', 1, 'icq', ?, ?)",
@@ -431,9 +443,9 @@ def has_contact(owner: int, other: int, c: Optional[sqlite3.Connection] = None) 
     if not owner or not other:
         return False
     if c is not None:
-        return c.execute("SELECT 1 FROM contacts WHERE owner=? AND contact=?", (owner, other)).fetchone() is not None
+        return c.execute("SELECT 1 FROM contacts WHERE owner=? AND contact=? AND created>0", (owner, other)).fetchone() is not None
     with conn() as c2:
-        return c2.execute("SELECT 1 FROM contacts WHERE owner=? AND contact=?", (owner, other)).fetchone() is not None
+        return c2.execute("SELECT 1 FROM contacts WHERE owner=? AND contact=? AND created>0", (owner, other)).fetchone() is not None
 
 
 def visible_avatar(row: sqlite3.Row, viewer: int, c: Optional[sqlite3.Connection] = None) -> Optional[str]:
@@ -551,6 +563,8 @@ def log_group(c: sqlite3.Connection, gid: int, uin: int, action: str, actor: int
 
 def msg_json(c: sqlite3.Connection, row: sqlite3.Row, viewer: int = 0) -> dict:
     d = _msg_json(c, row)
+    if _col(row, "story_id"):
+        d["story"] = {"id": row["story_id"], "att_id": _col(row, "story_att")}
     d["views"] = views_of(c, row)
     if row["kind"] == "poll":
         d["poll"] = poll_json(c, row["id"], viewer)
@@ -1206,8 +1220,8 @@ def get_user(uin: int, authorization: Optional[str] = Header(None)) -> dict:
     me = require_uin(authorization)
     with conn() as c:
         row = c.execute("SELECT * FROM users WHERE uin=?", (uin,)).fetchone()
-        k = c.execute("SELECT * FROM contacts WHERE owner=? AND contact=?", (me, uin)).fetchone() if row else None
-        back = c.execute("SELECT 1 FROM contacts WHERE owner=? AND contact=?", (uin, me)).fetchone() if row else None
+        k = c.execute("SELECT * FROM contacts WHERE owner=? AND contact=? AND created>0", (me, uin)).fetchone() if row else None
+        back = c.execute("SELECT 1 FROM contacts WHERE owner=? AND contact=? AND created>0", (uin, me)).fetchone() if row else None
     if not row:
         raise HTTPException(404, "Пользователь не найден")
     d = user_json(row, with_phone=True)
@@ -1349,8 +1363,8 @@ async def end_session(sid: str, authorization: Optional[str] = Header(None)) -> 
 def contact_json(c: sqlite3.Connection, owner: int, row: sqlite3.Row) -> dict:
     """A person in [owner]'s contact list: my name for him, his number (if he lets me see it), arrows."""
     d = user_json(row, viewer=owner, with_phone=True, c=c)
-    k = c.execute("SELECT * FROM contacts WHERE owner=? AND contact=?", (owner, row["uin"])).fetchone()
-    back = c.execute("SELECT created FROM contacts WHERE owner=? AND contact=?", (row["uin"], owner)).fetchone()
+    k = c.execute("SELECT * FROM contacts WHERE owner=? AND contact=? AND created>0", (owner, row["uin"])).fetchone()
+    back = c.execute("SELECT created FROM contacts WHERE owner=? AND contact=? AND created>0", (row["uin"], owner)).fetchone()
     d["contact"] = k is not None
     d["added_me"] = back is not None
     d["mutual"] = k is not None and back is not None
@@ -1367,7 +1381,7 @@ def contacts(authorization: Optional[str] = Header(None)) -> list:
     uin = require_uin(authorization)
     with conn() as c:
         rows = c.execute(
-            "SELECT u.* FROM contacts k JOIN users u ON u.uin=k.contact WHERE k.owner=?"
+            "SELECT u.* FROM contacts k JOIN users u ON u.uin=k.contact WHERE k.owner=? AND k.created>0"
             " ORDER BY COALESCE(k.alias, u.name) COLLATE NOCASE",
             (uin,),
         ).fetchall()
@@ -1380,8 +1394,8 @@ def incoming_contacts(authorization: Optional[str] = Header(None)) -> list:
     uin = require_uin(authorization)
     with conn() as c:
         rows = c.execute(
-            "SELECT u.* FROM contacts k JOIN users u ON u.uin=k.owner WHERE k.contact=? AND u.banned=0"
-            " AND u.uin<>? AND NOT EXISTS (SELECT 1 FROM contacts x WHERE x.owner=? AND x.contact=k.owner)"
+            "SELECT u.* FROM contacts k JOIN users u ON u.uin=k.owner WHERE k.contact=? AND k.created>0 AND u.banned=0"
+            " AND u.uin<>? AND NOT EXISTS (SELECT 1 FROM contacts x WHERE x.owner=? AND x.contact=k.owner AND x.created>0)"
             " AND NOT EXISTS (SELECT 1 FROM blocks b WHERE b.owner=? AND b.blocked=k.owner)"
             " ORDER BY k.created DESC LIMIT 200",
             (uin, BOT_UIN, uin, uin),
@@ -1414,11 +1428,17 @@ async def add_contact(body: ContactIn, authorization: Optional[str] = Header(Non
         if row["uin"] == uin:
             raise HTTPException(400, "Нельзя добавить самого себя")
         alias = (body.name or "").strip()[:64] or None
-        existed = c.execute("SELECT 1 FROM contacts WHERE owner=? AND contact=?", (uin, row["uin"])).fetchone()
+        prev = c.execute("SELECT created FROM contacts WHERE owner=? AND contact=?", (uin, row["uin"])).fetchone()
+        existed = prev is not None and (prev["created"] or 0) > 0
         if existed:
             c.execute(
                 "UPDATE contacts SET alias=?, share_phone=? WHERE owner=? AND contact=?",
                 (alias, int(body.share_phone), uin, row["uin"]),
+            )
+        elif prev is not None:  # we only chatted before: now it becomes a real contact
+            c.execute(
+                "UPDATE contacts SET alias=?, share_phone=?, created=? WHERE owner=? AND contact=?",
+                (alias, int(body.share_phone), now_ms(), uin, row["uin"]),
             )
         else:
             c.execute(
@@ -1439,7 +1459,8 @@ async def add_contact(body: ContactIn, authorization: Optional[str] = Header(Non
 def remove_contact(other: int, authorization: Optional[str] = Header(None)) -> dict:
     uin = require_uin(authorization)
     with conn() as c:
-        c.execute("DELETE FROM contacts WHERE owner=? AND contact=?", (uin, other))
+        # keep the chat, drop only the "contact" mark
+        c.execute("UPDATE contacts SET created=0, alias=NULL, share_phone=0 WHERE owner=? AND contact=?", (uin, other))
     return {"ok": True}
 
 
@@ -1462,10 +1483,7 @@ def sync_contacts(body: SyncIn, authorization: Optional[str] = Header(None)) -> 
                 (*chunk, uin),
             ).fetchall()
         c.executemany("INSERT OR IGNORE INTO phonebook(owner, key) VALUES(?,?)", [(uin, k) for k in keys])
-        c.executemany(
-            "INSERT OR IGNORE INTO contacts(owner, contact, created) VALUES(?,?,?)",
-            [(uin, r["uin"], now_ms()) for r in found],
-        )
+        # only shown as "these people from your phone book are in ICQ" — not added automatically
         return [contact_json(c, uin, r) for r in found]
 
 
@@ -1981,7 +1999,7 @@ def public_posts(gid: int, limit: int = Query(5), authorization: Optional[str] =
             raise HTTPException(404, "Чат не найден")
         rows = c.execute(
             "SELECT * FROM messages WHERE group_id=? AND deleted=0 AND kind NOT IN ('system','gone')"
-            " ORDER BY id DESC LIMIT ?", (gid, max(1, min(limit, 20))),
+            " ORDER BY id DESC LIMIT ?", (gid, max(1, min(limit, 100))),
         ).fetchall()
         return [msg_json(c, r, uin) for r in rows]
 
@@ -3478,9 +3496,12 @@ BOT_HELP = (
     "/me — ваш профиль\n"
     "/username — как получить @имя\n"
     "/groups — как создать группу или канал\n"
-    "/stories — как выложить историю\n"
-    "/help — эта справка"
+    "/stories — как сделать публикацию\n"
+    "/community — ICQ Community: общий чат пользователей\n"
+    "/help — эта справка\n\n"
+    "💬 ICQ Community: https://icq-new.online/@icqcommunity"
 )
+COMMUNITY_USERNAME = "icqcommunity"
 
 
 def bot_text_for(c: sqlite3.Connection, uin: int, text: str, kind: str) -> str:
@@ -3493,6 +3514,14 @@ def bot_text_for(c: sqlite3.Connection, uin: int, text: str, kind: str) -> str:
         return f"Привет, {u['name']}! 👋\nДобро пожаловать в ICQ New.\n\n" + BOT_HELP
     if low in ("/help", "help", "помощь", "?"):
         return BOT_HELP
+    if low in ("/community", "community", "сообщество"):
+        g = c.execute("SELECT id FROM groups WHERE username=?", (COMMUNITY_USERNAME,)).fetchone()
+        n = c.execute("SELECT COUNT(*) AS n FROM group_members WHERE gid=?", (g["id"],)).fetchone()["n"] if g else 0
+        return (
+            "💬 **ICQ Community** — общий чат пользователей ICQ New: новости, вопросы, идеи и знакомства.\n"
+            f"Участников: {n}\n\n"
+            "Вступить: https://icq-new.online/@icqcommunity"
+        )
     if low == "/id":
         return f"🆔 Ваш ID: {uin}\n\nЧужой ID: /id @имя"
     if low.startswith("/id ") or (low.startswith("@") and " " not in low):
@@ -3517,7 +3546,7 @@ def bot_text_for(c: sqlite3.Connection, uin: int, text: str, kind: str) -> str:
         return ("Нажмите ✏️ в списке чатов → «Новая группа» или «Новый канал». "
                 "В настройках группы можно поменять имя и фото бота, включить медленный режим и другое.")
     if low == "/stories":
-        return "На вкладке «Чаты» нажмите «Моя история» вверху, выберите фото и добавьте подпись. История видна 24 часа."
+        return "Нажмите «Моя публикация» вверху списка чатов, выберите фото и добавьте подпись. Публикация видна 24 часа."
     if any(w in low for w in ("салам", "привет", "salam", "hello", "hi", "здравств")):
         return f"Привет, {u['name']}! 😊 Чем помочь? Напишите /help"
     if any(w in low for w in ("спасибо", "sag bol", "sagbol", "thanks", "thank")):
@@ -3623,7 +3652,7 @@ async def add_story(body: StoryIn, authorization: Optional[str] = Header(None)) 
     with conn() as c:
         f = c.execute("SELECT * FROM files WHERE id=? AND owner=?", (body.att_id, uin)).fetchone()
         if not f or not f["mime"].startswith("image/"):
-            raise HTTPException(400, "Для истории нужно фото")
+            raise HTTPException(400, "Для публикации нужно фото")
         cur = c.execute(
             "INSERT INTO stories(uin, att_id, text, ts) VALUES(?,?,?,?)", (uin, body.att_id, body.text.strip()[:300], now_ms())
         )
@@ -3708,8 +3737,39 @@ async def add_story_comment(sid: int, body: StoryCommentIn, authorization: Optio
     if author != uin:
         await manager.send(author, {"type": "stories"})
         if not manager.connected(author):
-            push_data(author, {"type": "msg", "peer": uin, "title": me["name"], "body": "💬 Комментарий к истории: " + text[:120]})
+            push_data(author, {"type": "msg", "peer": uin, "title": me["name"], "body": "💬 Комментарий к публикации: " + text[:120]})
     return item
+
+
+@app.post("/api/stories/{sid}/reply")
+async def reply_story(sid: int, body: StoryCommentIn, authorization: Optional[str] = Header(None)) -> dict:
+    """Answer to a publication: goes privately to its author's chat, with the publication quoted (like Telegram)."""
+    uin = require_uin(authorization)
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(400, "Пустое сообщение")
+    with conn() as c:
+        s = _story_for(c, sid, uin)
+        author = s["uin"]
+        if author == uin:
+            raise HTTPException(400, "Это ваша публикация")
+        if is_blocked(c, author, uin):
+            raise HTTPException(403, "Пользователь ограничил сообщения")
+        for a, b in ((uin, author), (author, uin)):
+            c.execute("INSERT OR IGNORE INTO contacts(owner, contact) VALUES(?,?)", (a, b))
+        ttl = chat_ttl_of(c, uin, author, None)
+        now = now_ms()
+        cur = c.execute(
+            "INSERT INTO messages(client_id, from_uin, to_uin, text, ts, kind, rev, story_id, story_att, expire_at)"
+            " VALUES(?,?,?,?,?,'text',?,?,?,?)",
+            ("st-" + secrets.token_hex(8), uin, author, text[:4000], now, next_rev(c), sid, s["att_id"],
+             now + ttl * 1000 if ttl else 0),
+        )
+        row = c.execute("SELECT * FROM messages WHERE id=?", (cur.lastrowid,)).fetchone()
+        msg = msg_json(c, row)
+        push_message(c, row, [author])
+    await manager.send(author, {"type": "message", "message": msg})
+    return msg
 
 
 @app.delete("/api/stories/{sid}/comments/{cid}")

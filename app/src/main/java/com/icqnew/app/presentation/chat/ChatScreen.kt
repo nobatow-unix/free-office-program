@@ -156,6 +156,7 @@ fun ChatScreen(
     var creatingPoll by remember { mutableStateOf(false) }
     var attachSheet by remember { mutableStateOf(false) }
     var pendingFiles by remember { mutableStateOf<List<PendingFile>>(emptyList()) }
+    val storyLoader: suspend (String) -> File? = remember(vm) { { att -> vm.storyFile(att) } }
     var actionsFor by remember { mutableStateOf<ChatMessage?>(null) }
     var forwarding by remember { mutableStateOf<ChatMessage?>(null) }
     var deleting by remember { mutableStateOf<ChatMessage?>(null) }
@@ -597,6 +598,7 @@ fun ChatScreen(
                                     } else {
                                         val isBot = m.kind == MessageKind.BOT
                                         val showSender = isBot || (isGroup && !isChannel && !m.fromMe)
+                                        CompositionLocalProvider(LocalStoryFile provides storyLoader) {
                                         MessageRow(
                                             m = m,
                                             firstOfGroup = row.firstOfGroup,
@@ -631,6 +633,7 @@ fun ChatScreen(
                                             onVote = if (m.kind == MessageKind.POLL) ({ opts -> vm.vote(m, opts) }) else null,
                                             channelPost = isChannel && !isBot,
                                         )
+                                        }
                                     }
                                 }
                             }
@@ -651,8 +654,21 @@ fun ChatScreen(
                         }
                     }
                 }
+                // only mentions I had not read when I opened the chat; one that has been on screen is done
+                val unreadAtOpen = remember(uin) { mutableStateOf<Set<Long>?>(null) }
+                LaunchedEffect(uin, messages.isNotEmpty()) {
+                    if (unreadAtOpen.value == null && messages.isNotEmpty()) {
+                        unreadAtOpen.value = messages.filter { !it.fromMe && !it.isRead }.map { it.id }.toSet()
+                    }
+                }
                 var visitedMentions by remember(uin) { mutableStateOf(setOf<Long>()) }
-                val pendingMentions = mentionRows.filter { it.second !in visitedMentions }
+                LaunchedEffect(mentionRows) {
+                    snapshotFlow { listState.layoutInfo.visibleItemsInfo.map { it.index }.toSet() }.collect { vis ->
+                        val seen = mentionRows.filter { it.first in vis }.map { it.second }
+                        if (seen.any { it !in visitedMentions }) visitedMentions = visitedMentions + seen
+                    }
+                }
+                val pendingMentions = mentionRows.filter { it.second !in visitedMentions && it.second in (unreadAtOpen.value ?: emptySet()) }
                 androidx.compose.animation.AnimatedVisibility(
                     visible = pendingMentions.isNotEmpty(),
                     modifier = Modifier.align(Alignment.BottomEnd).padding(end = 14.dp, bottom = 70.dp),

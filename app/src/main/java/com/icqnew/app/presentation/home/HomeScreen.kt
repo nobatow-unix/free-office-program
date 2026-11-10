@@ -56,6 +56,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.foundation.border
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
@@ -120,66 +121,6 @@ private fun UpdateProgressCircle(updater: com.icqnew.app.data.update.Updater) {
                 modifier = Modifier.size(15.dp).offset(y = dy.dp),
             )
         }
-    }
-}
-
-private val TAB_COLORS = listOf(
-    Color(0xFF22C55E), // personal: green (like the phone icon)
-    Color(0xFF2F8CFF), // groups: blue (like messages)
-    Color(0xFFFF8A00), // channels: orange
-    Color(0xFF7C5CFF), // bots: violet
-    Color(0xFFF2385A), // profile: red
-)
-
-/** A tab drawn as a rounded-square app icon with a soft gradient; the chosen one is bigger and lit. */
-@Composable
-private fun SquircleTab(
-    title: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    color: Color,
-    selected: Boolean,
-    badge: Int,
-    avatar: (@Composable () -> Unit)?,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val scale by androidx.compose.animation.core.animateFloatAsState(
-        if (selected) 1.06f else 0.9f, androidx.compose.animation.core.spring(dampingRatio = 0.55f), label = "tab",
-    )
-    val shape = RoundedCornerShape(32)
-    Column(
-        modifier.clip(RoundedCornerShape(14.dp))
-            .clickable(
-                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                indication = null, onClick = onClick,
-            )
-            .padding(vertical = 2.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Box(Modifier.size(46.dp), contentAlignment = Alignment.Center) {
-            Box(
-                Modifier.size(40.dp).graphicsLayer { scaleX = scale; scaleY = scale; alpha = if (selected) 1f else 0.78f }
-                    .shadow(if (selected) 6.dp else 0.dp, shape, clip = false, spotColor = color)
-                    .clip(shape)
-                    .background(
-                        if (avatar != null) Brush.verticalGradient(listOf(Color.Transparent, Color.Transparent))
-                        else Brush.verticalGradient(listOf(androidx.compose.ui.graphics.lerp(color, Color.White, 0.22f), color))
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (avatar != null) avatar() else Icon(icon, null, Modifier.size(22.dp), tint = Color.White)
-            }
-            if (badge > 0) {
-                com.icqnew.app.presentation.components.CountBadge(
-                    badge, small = true, modifier = Modifier.align(Alignment.TopEnd).offset(x = 4.dp, y = (-2).dp),
-                )
-            }
-        }
-        Text(
-            title, fontSize = 11.sp, maxLines = 1,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 
@@ -434,12 +375,8 @@ fun HomeScreen(
         bottomBar = {
             Column {
             UpdateBanner(container.updater)
-            // One UI–style bar: every tab is a colourful "squircle" app icon
-            Row(
-                Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainerLow)
-                    .navigationBarsPadding().padding(top = 6.dp, bottom = 4.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-            ) {
+            // classic bar, without its own dark background; the open section is lit in colour
+            NavigationBar(containerColor = Color.Transparent, tonalElevation = 0.dp) {
                 TABS.forEachIndexed { i, t ->
                     val badge = when (i) {
                         0 -> unreadOf(personal)
@@ -448,13 +385,36 @@ fun HomeScreen(
                         3 -> unreadOf(bots)
                         else -> 0
                     }
-                    SquircleTab(
-                        title = t.title, icon = t.icon, color = TAB_COLORS[i], selected = tab == i, badge = badge,
-                        avatar = if (i == 4 && session != null) ({
-                            Avatar(session!!.name, session!!.uin, session!!.avatarUrl, false, 40.dp, isSelf = false, storyRing = false)
-                        }) else null,
+                    val selected = tab == i
+                    NavigationBarItem(
+                        selected = selected,
                         onClick = { if (tab == i && i == 4) profilePage = null; tab = i },
-                        modifier = Modifier.weight(1f),
+                        icon = {
+                            BadgedBox(badge = {
+                                if (badge > 0) com.icqnew.app.presentation.components.CountBadge(badge, small = true)
+                            }) {
+                                if (i == 4 && session != null) {
+                                    Box(
+                                        Modifier.size(26.dp).clip(CircleShape)
+                                            .border(if (selected) 2.dp else 0.dp, MaterialTheme.colorScheme.primary, CircleShape),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Avatar(session!!.name, session!!.uin, session!!.avatarUrl, false, if (selected) 22.dp else 26.dp,
+                                            storyRing = false)
+                                    }
+                                } else Icon(t.icon, t.title, Modifier.size(24.dp))
+                            }
+                        },
+                        label = {
+                            Text(t.title, fontSize = 11.sp, maxLines = 1, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+                        },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = MaterialTheme.colorScheme.primary,
+                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                            indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        ),
                     )
                 }
             }
@@ -901,7 +861,7 @@ private fun ChatListItem(
         Spacer(Modifier.width(10.dp))
         Column(horizontalAlignment = Alignment.End) {
             Text(
-                formatListTime(chat.lastTs), fontSize = 12.sp,
+                if (chat.lastTs > 0) formatListTime(chat.lastTs) else "", fontSize = 12.sp,
                 color = if (chat.unread > 0 && !chat.muted) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.onSurfaceVariant,
             )

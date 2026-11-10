@@ -242,7 +242,12 @@ data class MessageDto(
     val reactions: List<ReactionDto> = emptyList(),
     val views: Int = 0,
     val poll: PollDto? = null,
+    /** answer to a publication (story) */
+    val story: StoryRefDto? = null,
 )
+
+@Serializable
+data class StoryRefDto(val id: Long, @SerialName("att_id") val attId: String? = null)
 
 @Serializable
 data class PollOptionDto(val text: String, val votes: Int = 0)

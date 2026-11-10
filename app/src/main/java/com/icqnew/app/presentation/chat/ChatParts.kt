@@ -17,6 +17,10 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.Canvas
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalDensity
@@ -179,7 +183,7 @@ fun MessageRow(
 ) {
     val mine = m.fromMe
     val bigEmoji = remember(m.text, m.kind, m.deleted) {
-        if (!m.deleted && (m.kind == MessageKind.TEXT || m.kind == MessageKind.STICKER) && m.replyTo == null && m.fwdName == null)
+        if (!m.deleted && (m.kind == MessageKind.TEXT || m.kind == MessageKind.STICKER) && m.replyTo == null && m.fwdName == null && m.storyAtt == null)
             Emoji.onlyEmojiCount(m.text) else 0
     }
     // ---- swipe right to reply ----
@@ -452,7 +456,8 @@ private fun Bubble(
         bottomEnd = if (mine && lastOfGroup) 4.dp else if (mine) small else big,
     )
     val isImage = m.kind == MessageKind.IMAGE && !m.deleted
-    val hasHeader = (showSender && firstOfGroup) || (m.fwdName != null && !m.deleted) || (m.replyTo != null && !m.deleted)
+    val hasHeader = (showSender && firstOfGroup) || (m.fwdName != null && !m.deleted) || (m.replyTo != null && !m.deleted) ||
+        (m.storyAtt != null && !m.deleted)
 
     // A photo without captions is shown on its own, with rounded corners and no coloured frame.
     val caption = if (m.deleted) "" else m.text
@@ -514,6 +519,35 @@ private fun Bubble(
                         reply?.let { shortPreview(it) } ?: "Сообщение недоступно",
                         color = fg.copy(alpha = 0.85f), fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
+                }
+            }
+        }
+        // answer to a publication: small picture + "Ответ на публикацию"
+        if (m.storyAtt != null && !m.deleted) {
+            Row(
+                inset.padding(top = 2.dp, bottom = 5.dp).clip(RoundedCornerShape(8.dp))
+                    .background(if (mine) Color.Black.copy(alpha = 0.12f) else primary.copy(alpha = 0.10f))
+                    .height(IntrinsicSize.Min),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.width(3.dp).fillMaxHeight().background(if (mine) Color.White else primary))
+                val loader = LocalStoryFile.current
+                val thumb by produceState<File?>(null, m.storyAtt) {
+                    value = if (m.storyAtt.isBlank() || loader == null) null else runCatching { loader(m.storyAtt) }.getOrNull()
+                }
+                Box(
+                    Modifier.padding(start = 6.dp, top = 4.dp, bottom = 4.dp).size(width = 30.dp, height = 40.dp)
+                        .clip(RoundedCornerShape(5.dp)).background(fg.copy(alpha = 0.15f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    thumb?.let {
+                        AsyncImage(model = it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                    } ?: Icon(Icons.Filled.Image, null, tint = fg.copy(alpha = 0.6f), modifier = Modifier.size(16.dp))
+                }
+                Column(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+                    Text("Публикация", color = if (mine) fg else primary, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1)
+                    Text(if (mine) "Вы ответили на публикацию" else "Ответ на вашу публикацию",
+                        color = fg.copy(alpha = 0.85f), fontSize = 13.sp, maxLines = 1)
                 }
             }
         }
@@ -810,8 +844,12 @@ private fun ImageContent(
         }
         file = f
     }
+    // the whole picture, never cropped, in a compact box: at most 230 dp wide and 300 dp tall
+    val r = ratio.coerceIn(0.3f, 3.5f)
+    val boxW = minOf(230f, 300f * r).coerceAtLeast(110f)
+    val boxH = (boxW / r).coerceIn(80f, 300f)
     Box(
-        Modifier.width(260.dp).aspectRatio(ratio.coerceIn(0.5f, 2.4f)).clip(shape)
+        Modifier.size(boxW.dp, boxH.dp).clip(shape)
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .combinedClickable(onClick = { file?.let(onImage) }, onLongClick = onLongPress),
         contentAlignment = Alignment.Center,
@@ -819,8 +857,7 @@ private fun ImageContent(
         if (file != null) {
             AsyncImage(
                 model = file, contentDescription = null,
-                // whole picture; only extremely tall / wide ones get slightly trimmed
-                contentScale = if (ratio in 0.5f..2.4f) ContentScale.Fit else ContentScale.Crop,
+                contentScale = ContentScale.Fit,
                 modifier = Modifier.fillMaxSize(),
             )
         } else CircularProgressIndicator(Modifier.size(24.dp), color = MaterialTheme.colorScheme.primary, strokeWidth = 2.dp)
@@ -914,6 +951,9 @@ fun Meta(m: ChatMessage, color: Color) {
         }
     }
 }
+
+/** Loads the picture of a publication quoted in an answer (provided by the chat screen). */
+val LocalStoryFile = staticCompositionLocalOf<(suspend (String) -> File?)?> { null }
 
 /** 999 / 1,2K / 12K / 1,3M — like Telegram's view counter. */
 fun compactCount(n: Int): String = when {
@@ -1210,34 +1250,138 @@ fun LinkPreviewCard(url: String, mine: Boolean, load: suspend (String) -> com.ic
 /** Round video message: plays muted in a loop inside the circle, tap = full screen with sound. */
 @Composable
 fun VideoNote(m: ChatMessage, source: suspend () -> Pair<String, Map<String, String>>?, onOpen: () -> Unit, onLongPress: () -> Unit) {
+    // Round video message like Telegram: fills the circle (centre crop), loops silently;
+    // a tap plays it from the start WITH sound and a progress ring, another tap mutes it again.
+    // TextureView (not VideoView/SurfaceView) so it is really clipped to a circle and scrolls smoothly.
     var src by remember(m.id) { mutableStateOf<Pair<String, Map<String, String>>?>(null) }
     LaunchedEffect(m.id) { src = runCatching { source() }.getOrNull() }
+    var player by remember(m.id) { mutableStateOf<android.media.MediaPlayer?>(null) }
+    var ready by remember(m.id) { mutableStateOf(false) }
+    var failed by remember(m.id) { mutableStateOf(false) }
+    var sound by remember(m.id) { mutableStateOf(false) }
+    var progress by remember(m.id) { mutableFloatStateOf(0f) }
+    val primary = MaterialTheme.colorScheme.primary
+    val scale by animateFloatAsState(if (sound) 1.08f else 1f, spring(dampingRatio = 0.6f), label = "note")
+
+    LaunchedEffect(sound, player, ready) {
+        val p = player ?: return@LaunchedEffect
+        if (!ready) return@LaunchedEffect
+        runCatching {
+            if (sound) {
+                p.isLooping = false
+                p.setVolume(1f, 1f)
+                p.seekTo(0)
+                p.start()
+                p.setOnCompletionListener { sound = false }
+                while (sound) {
+                    val d = p.duration.coerceAtLeast(1)
+                    progress = (p.currentPosition.toFloat() / d).coerceIn(0f, 1f)
+                    kotlinx.coroutines.delay(40)
+                }
+            } else {
+                p.setOnCompletionListener(null)
+                p.isLooping = true
+                p.setVolume(0f, 0f)
+                if (!p.isPlaying) p.start()
+                progress = 0f
+            }
+        }
+    }
+
     Box(
-        Modifier.size(220.dp).clip(CircleShape).background(Color.Black)
-            .border(2.dp, MaterialTheme.colorScheme.primary, CircleShape)
-            .pointerInput(m.id) { detectTapGestures(onTap = { onOpen() }, onLongPress = { onLongPress() }) },
+        Modifier.size(212.dp).graphicsLayer { scaleX = scale; scaleY = scale },
         contentAlignment = Alignment.Center,
     ) {
-        val s = src
-        if (s != null) {
-            androidx.compose.ui.viewinterop.AndroidView(
-                factory = { ctx ->
-                    android.widget.VideoView(ctx).apply {
-                        setOnPreparedListener { mp -> mp.isLooping = true; mp.setVolume(0f, 0f); start() }
-                        setOnErrorListener { _, _, _ -> true }
-                        setVideoURI(android.net.Uri.parse(s.first), s.second)
-                    }
-                },
-                onRelease = { it.stopPlayback() },
-                modifier = Modifier.fillMaxSize(),
-            )
-        } else {
-            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(28.dp))
-        }
         Box(
-            Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp).clip(RoundedCornerShape(10.dp))
-                .background(Color.Black.copy(alpha = 0.45f)).padding(horizontal = 8.dp, vertical = 2.dp),
-        ) { Text(durationText(m.attDurMs), color = Color.White, fontSize = 12.sp) }
+            Modifier.size(200.dp).clip(CircleShape).background(Color(0xFF1B1F24))
+                .pointerInput(m.id) {
+                    detectTapGestures(
+                        onTap = { if (ready) sound = !sound else if (failed) onOpen() },
+                        onLongPress = { onLongPress() },
+                    )
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            val s = src
+            if (s != null && !failed) {
+                androidx.compose.ui.viewinterop.AndroidView(
+                    factory = { ctx ->
+                        android.view.TextureView(ctx).apply {
+                            surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
+                                override fun onSurfaceTextureAvailable(st: android.graphics.SurfaceTexture, w: Int, h: Int) {
+                                    val view = this@apply
+                                    runCatching {
+                                        val mp = android.media.MediaPlayer()
+                                        mp.setSurface(android.view.Surface(st))
+                                        mp.setDataSource(ctx, android.net.Uri.parse(s.first), s.second)
+                                        mp.setOnVideoSizeChangedListener { _, vw, vh -> centerCrop(view, vw, vh) }
+                                        mp.setOnPreparedListener {
+                                            it.isLooping = true
+                                            it.setVolume(0f, 0f)
+                                            it.start()
+                                            ready = true
+                                        }
+                                        mp.setOnErrorListener { _, _, _ -> failed = true; true }
+                                        mp.prepareAsync()
+                                        player = mp
+                                    }.onFailure { failed = true }
+                                }
+                                override fun onSurfaceTextureSizeChanged(st: android.graphics.SurfaceTexture, w: Int, h: Int) {}
+                                override fun onSurfaceTextureDestroyed(st: android.graphics.SurfaceTexture): Boolean {
+                                    runCatching { player?.release() }
+                                    player = null
+                                    ready = false
+                                    return true
+                                }
+                                override fun onSurfaceTextureUpdated(st: android.graphics.SurfaceTexture) {}
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            if (failed) {
+                Icon(Icons.Filled.PlayArrow, "Открыть", tint = Color.White, modifier = Modifier.size(42.dp))
+            } else if (!ready) {
+                CircularProgressIndicator(color = Color.White, strokeWidth = 2.5.dp, modifier = Modifier.size(30.dp))
+            }
+        }
+        // progress ring while it plays with sound
+        Canvas(Modifier.size(208.dp)) {
+            val st = 3.dp.toPx()
+            if (sound) drawArc(
+                primary, -90f, 360f * progress, false,
+                topLeft = androidx.compose.ui.geometry.Offset(st / 2, st / 2),
+                size = androidx.compose.ui.geometry.Size(size.width - st, size.height - st),
+                style = androidx.compose.ui.graphics.drawscope.Stroke(st, cap = androidx.compose.ui.graphics.StrokeCap.Round),
+            )
+        }
+        Row(
+            Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp).clip(RoundedCornerShape(10.dp))
+                .background(Color.Black.copy(alpha = 0.5f)).padding(horizontal = 8.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                if (sound) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff, null,
+                tint = Color.White, modifier = Modifier.size(13.dp),
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(durationText(m.attDurMs), color = Color.White, fontSize = 12.sp)
+        }
+    }
+}
+
+/** Scales the video inside a TextureView so it covers it completely (like ContentScale.Crop). */
+private fun centerCrop(v: android.view.TextureView, vw: Int, vh: Int) {
+    if (vw <= 0 || vh <= 0) return
+    v.post {
+        val w = v.width.toFloat(); val h = v.height.toFloat()
+        if (w <= 0f || h <= 0f) return@post
+        val sx = w / vw; val sy = h / vh
+        val s = maxOf(sx, sy)
+        val mtx = android.graphics.Matrix()
+        mtx.setScale(s / sx, s / sy, w / 2f, h / 2f)
+        v.setTransform(mtx)
     }
 }
 

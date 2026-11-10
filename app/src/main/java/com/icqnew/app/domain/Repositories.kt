@@ -156,6 +156,8 @@ interface ChatRepository {
     /** Straight from the server (with birthday, colour and the personal channel). */
     suspend fun fetchUserFresh(uin: Long): User?
     /** Auto-delete for all my chats (seconds, 0 = off; 2 days by default). */
+    /** Answer to a publication: a private message to its author with the publication quoted. */
+    suspend fun replyStory(storyId: Long, text: String)
     suspend fun defaultTtl(): Int
     suspend fun setDefaultTtl(seconds: Int): Int
     /** Latest posts of an open channel (preview before subscribing). */

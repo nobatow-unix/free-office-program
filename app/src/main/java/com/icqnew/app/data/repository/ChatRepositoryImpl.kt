@@ -140,7 +140,9 @@ class ChatRepositoryImpl(
                     3 -> MessageStatus.FAILED
                     else -> MessageStatus.SENT
                 },
-                lastText = if (r.lastDeleted) "Сообщение удалено" else preview(r.lastKind, r.lastText, r.lastAttName),
+                lastText = if (r.lastDeleted) "Сообщение удалено"
+                else if (r.lastTs == 0L) (if (r.kind == "channel") "Вы подписались на канал" else "Вы вступили в группу")
+                else preview(r.lastKind, r.lastText, r.lastAttName),
                 lastTs = r.lastTs,
                 lastFromMe = r.lastFromMe,
                 unread = r.unread,
@@ -794,6 +796,10 @@ class ChatRepositoryImpl(
         }
     }
 
+    override suspend fun replyStory(storyId: Long, text: String) {
+        applyMessage(api.replyStory(storyId, text), firstSync = true)
+    }
+
     override suspend fun defaultTtl(): Int = api.defaultTtl().seconds
 
     override suspend fun setDefaultTtl(seconds: Int): Int = api.setDefaultTtl(seconds).seconds
@@ -831,6 +837,10 @@ class ChatRepositoryImpl(
 
     override suspend fun joinChat(gid: Long): Long {
         saveGroup(api.joinGroup(gid))
+        // the posts written before I joined: so the channel is in «Каналы» at once, with its content
+        runCatching { api.publicPosts(gid, 60) }.getOrNull()?.sortedBy { it.id }?.forEach {
+            runCatching { applyMessage(it, firstSync = true) }
+        }
         return groupPeer(gid)
     }
 
@@ -1009,6 +1019,7 @@ class ChatRepositoryImpl(
             reactions = encodeReactions(m),
             views = m.views,
             poll = mergePoll(m.poll, null),
+            storyAtt = m.story?.let { it.attId ?: "" },
         )
         return if (messageDao.insert(e) == -1L) null else e
     }
@@ -1185,6 +1196,8 @@ internal fun MessageEntity.toDomain(me: Long) = ChatMessage(
     reactions = decodeReactions(reactions, me),
     failReason = failReason,
     views = views,
+    storyAtt = storyAtt,
+    isRead = isRead,
     poll = poll?.let { decodePollDto(it) }?.let { p ->
         com.icqnew.app.domain.Poll(
             p.options.map { com.icqnew.app.domain.PollOption(it.text, it.votes) },
