@@ -1,0 +1,15 @@
+-dontobfuscate
+-keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod,SourceFile,LineNumberTable
+-keep class com.icqnew.admin.** { *; }
+-keep class io.ktor.** { *; }
+-dontwarn io.ktor.**
+-dontwarn org.slf4j.**
+-dontwarn java.lang.management.**
+-keepclassmembers class kotlinx.serialization.json.** { *** Companion; }
+-keepclasseswithmembers class ** { kotlinx.serialization.KSerializer serializer(...); }
+-dontwarn kotlinx.serialization.**
+-dontwarn org.conscrypt.**
+-dontwarn org.bouncycastle.**
+-dontwarn org.openjsse.**
+-dontwarn okhttp3.internal.platform.**
+-dontwarn javax.annotation.**

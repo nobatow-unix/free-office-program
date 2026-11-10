@@ -31,9 +31,11 @@ PKS: Dict[str, Tuple[str, ...]] = {
     "link_cache": ("url",), "post_views": ("msg_id", "uin"), "polls": ("msg_id",),
     "poll_votes": ("msg_id", "uin", "opt"), "group_log": ("id",), "stories": ("id",),
     "story_views": ("story", "uin"), "story_comments": ("id",),
+    "admins": ("id",), "admin_tokens": ("token",), "admin_log": ("id",),
 }
 # tables whose id is made by the database (lastrowid)
-SERIAL = {"messages", "groups", "clears", "balance_log", "user_gifts", "group_log", "stories", "story_comments"}
+SERIAL = {"messages", "groups", "clears", "balance_log", "user_gifts", "group_log", "stories", "story_comments",
+          "admins", "admin_log"}
 
 
 class Row(tuple):

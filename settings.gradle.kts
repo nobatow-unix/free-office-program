@@ -14,3 +14,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "ICQNew"
 include(":app")
+include(":admin")

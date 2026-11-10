@@ -478,6 +478,24 @@ def init_db() -> None:
         _add_column(c, "stories", "repost_of INTEGER")
         _add_column(c, "stories", "repost_uin INTEGER")
         _add_column(c, "qr_logins", "device TEXT")
+        # admin app: who sends the SMS with the code (by hand or automatically from a phone)
+        for col in ("claimed_by INTEGER", "claimed_at INTEGER NOT NULL DEFAULT 0", "sent_by INTEGER",
+                    "sent_at INTEGER NOT NULL DEFAULT 0", "sms_error TEXT"):
+            _add_column(c, "otp", col)
+        c.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS admins(id INTEGER PRIMARY KEY AUTOINCREMENT, login TEXT NOT NULL, pw_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'admin', perms TEXT NOT NULL DEFAULT '[]', enabled INTEGER NOT NULL DEFAULT 1,
+                created INTEGER NOT NULL, last_seen INTEGER NOT NULL DEFAULT 0, device TEXT, auto_sms INTEGER NOT NULL DEFAULT 0,
+                sms_sent INTEGER NOT NULL DEFAULT 0);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_admins_login ON admins(lower(login));
+            CREATE TABLE IF NOT EXISTS admin_tokens(token TEXT PRIMARY KEY, admin_id INTEGER NOT NULL, created INTEGER NOT NULL,
+                last_used INTEGER NOT NULL DEFAULT 0, device TEXT);
+            CREATE TABLE IF NOT EXISTS admin_log(id INTEGER PRIMARY KEY AUTOINCREMENT, admin_id INTEGER NOT NULL,
+                login TEXT NOT NULL, action TEXT NOT NULL, ts INTEGER NOT NULL);
+            CREATE INDEX IF NOT EXISTS idx_admin_log ON admin_log(ts);
+            """
+        )
         c.execute("UPDATE messages SET rev=id WHERE rev=0")
         c.execute(
             "INSERT OR IGNORE INTO meta(k, v) VALUES('rev', (SELECT COALESCE(MAX(rev), 0) FROM messages))"
@@ -1272,7 +1290,8 @@ async def request_code(body: CodeRequestIn) -> dict:
             raise HTTPException(429, f"Подождите {wait} с и запросите код снова")
         code = f"{secrets.randbelow(1_000_000):06d}"
         c.execute(
-            "INSERT OR REPLACE INTO otp(phone, code, created, attempts, sent) VALUES(?,?,?,0,0)",
+            "INSERT OR REPLACE INTO otp(phone, code, created, attempts, sent, claimed_by, claimed_at, sent_by, sent_at, sms_error)"
+            " VALUES(?,?,?,0,0,NULL,0,NULL,0,NULL)",
             (phone, code, now),
         )
     notify_admin(phone, code)
@@ -1404,7 +1423,8 @@ async def request_email_code(email: str) -> dict:
             wait = (RESEND_MS - (now - row["created"])) // 1000 + 1
             raise HTTPException(429, f"Подождите {wait} с и запросите код снова")
         code = f"{secrets.randbelow(1_000_000):06d}"
-        c.execute("INSERT OR REPLACE INTO otp(phone, code, created, attempts, sent) VALUES(?,?,?,0,0)", (key, code, now))
+        c.execute("INSERT OR REPLACE INTO otp(phone, code, created, attempts, sent, claimed_by, claimed_at, sent_by, sent_at, sms_error)"
+                  " VALUES(?,?,?,0,1,NULL,0,NULL,0,NULL)", (key, code, now))  # e-mail: nothing to send by SMS
         in_app = u is not None and c.execute("SELECT 1 FROM tokens WHERE uin=? LIMIT 1", (u["uin"],)).fetchone() is not None
     print(f"[OTP] {email}: {code}", flush=True)
     sent = await asyncio.to_thread(
@@ -3699,13 +3719,326 @@ async def flush_calls(uin: int) -> None:
 
 
 # ------------------------------------------------------------------------ admin
-basic = HTTPBasic()
+basic = HTTPBasic(auto_error=False)
+
+# what an admin may do (the super admin may do everything, also manage admins)
+ADMIN_PERMS = {
+    "sms": "Коды и SMS",
+    "users": "Пользователи",
+    "verify": "Галочки",
+    "groups": "Группы и каналы",
+    "balance": "Баланс",
+    "fragment": "Fragment",
+    "servers": "Серверы",
+}
+# which permission an admin API path needs
+_PATH_PERMS = [
+    ("/admin/api/pending", "sms"), ("/admin/api/sent", "sms"), ("/admin/api/sms", "sms"),
+    ("/admin/api/users", "users"), ("/admin/api/verify", "verify"), ("/admin/api/groups", "groups"),
+    ("/admin/api/balance", "balance"), ("/admin/api/fragment", "fragment"), ("/admin/api/cluster", "servers"),
+    ("/admin/api/admins", "super"), ("/admin/api/log", "super"),
+]
 
 
-def require_admin(creds: HTTPBasicCredentials = Depends(basic)) -> None:
-    ok = secrets.compare_digest(creds.username, "admin") and secrets.compare_digest(creds.password, ADMIN_PASSWORD)
-    if not ok:
+class AdminActor:
+    def __init__(self, aid: int, login: str, role: str, perms: List[str]):
+        self.id, self.login, self.role, self.perms = aid, login, role, perms
+
+    @property
+    def is_super(self) -> bool:
+        return self.role == "super"
+
+    def can(self, perm: str) -> bool:
+        return self.is_super or (perm != "super" and perm in self.perms)
+
+    def json(self) -> dict:
+        return {"id": self.id, "login": self.login, "role": self.role,
+                "perms": list(ADMIN_PERMS) if self.is_super else [p for p in self.perms if p in ADMIN_PERMS]}
+
+
+SUPER = AdminActor(0, "admin", "super", list(ADMIN_PERMS))
+
+
+def _admin_row_actor(r) -> AdminActor:
+    try:
+        perms = json.loads(r["perms"] or "[]")
+    except ValueError:
+        perms = []
+    return AdminActor(r["id"], r["login"], r["role"], [p for p in perms if p in ADMIN_PERMS])
+
+
+def _check_admin_login(login: str, password: str) -> Optional[AdminActor]:
+    login = (login or "").strip()
+    if login.lower() == "admin" and secrets.compare_digest(password or "", ADMIN_PASSWORD):
+        return SUPER
+    with conn() as c:
+        r = c.execute("SELECT * FROM admins WHERE lower(login)=lower(?) AND enabled=1", (login,)).fetchone()
+    if r and check_password(password or "", r["pw_hash"]):
+        return _admin_row_actor(r)
+    return None
+
+
+def admin_actor(request: Request, creds: Optional[HTTPBasicCredentials] = Depends(basic),
+                authorization: Optional[str] = Header(None)) -> AdminActor:
+    """Web panel: Basic login/password. Admin app: Bearer token from /admin/api/login."""
+    actor = None
+    if authorization and authorization.lower().startswith("bearer "):
+        tok = authorization[7:].strip()
+        with conn() as c:
+            t = c.execute("SELECT * FROM admin_tokens WHERE token=?", (tok,)).fetchone()
+            if t:
+                if t["admin_id"] == 0:
+                    actor = SUPER
+                else:
+                    r = c.execute("SELECT * FROM admins WHERE id=? AND enabled=1", (t["admin_id"],)).fetchone()
+                    actor = _admin_row_actor(r) if r else None
+                if actor and now_ms() - (t["last_used"] or 0) > 60_000:
+                    c.execute("UPDATE admin_tokens SET last_used=? WHERE token=?", (now_ms(), tok))
+                    if actor.id:
+                        c.execute("UPDATE admins SET last_seen=? WHERE id=?", (now_ms(), actor.id))
+        if actor is None:
+            raise HTTPException(401, "Войдите снова")
+    elif creds is not None:
+        actor = _check_admin_login(creds.username, creds.password)
+    if actor is None:
         raise HTTPException(401, "Unauthorized", headers={"WWW-Authenticate": "Basic"})
+    path = request.url.path
+    for prefix, perm in _PATH_PERMS:
+        if path.startswith(prefix):
+            if not actor.can(perm):
+                raise HTTPException(403, "Нет доступа к этому разделу")
+            break
+    return actor
+
+
+def require_admin(actor: AdminActor = Depends(admin_actor)) -> AdminActor:
+    return actor
+
+
+def admin_log(actor: AdminActor, action: str) -> None:
+    with conn() as c:
+        c.execute("INSERT INTO admin_log(admin_id, login, action, ts) VALUES(?,?,?,?)",
+                  (actor.id, actor.login, action[:300], now_ms()))
+
+
+_admin_fails: Dict[str, list] = {}
+
+
+@app.post("/admin/api/login")
+def admin_login(body: dict, request: Request) -> dict:
+    """Admin app: login + password -> token."""
+    login = str(body.get("login") or "").strip()
+    key = login.lower() + "|" + client_ip(request)
+    now = now_ms()
+    fails = [t for t in _admin_fails.get(key, []) if now - t < 15 * 60_000]
+    if len(fails) >= 8:
+        raise HTTPException(429, "Слишком много попыток. Подождите 15 минут")
+    actor = _check_admin_login(login, str(body.get("password") or ""))
+    if actor is None:
+        fails.append(now)
+        _admin_fails[key] = fails
+        raise HTTPException(400, "Неверный логин или пароль")
+    _admin_fails.pop(key, None)
+    tok = secrets.token_hex(32)
+    device = str(body.get("device") or "")[:80]
+    with conn() as c:
+        c.execute("INSERT INTO admin_tokens(token, admin_id, created, last_used, device) VALUES(?,?,?,?,?)",
+                  (tok, actor.id, now, now, device))
+        if actor.id:
+            c.execute("UPDATE admins SET last_seen=?, device=? WHERE id=?", (now, device, actor.id))
+    admin_log(actor, f"вход в приложение ({device or 'устройство'})")
+    return {"token": tok, "admin": actor.json(), "perm_names": ADMIN_PERMS}
+
+
+@app.post("/admin/api/logout")
+def admin_logout(authorization: Optional[str] = Header(None), _: AdminActor = Depends(require_admin)) -> dict:
+    if authorization and authorization.lower().startswith("bearer "):
+        with conn() as c:
+            c.execute("DELETE FROM admin_tokens WHERE token=?", (authorization[7:].strip(),))
+    return {"ok": True}
+
+
+@app.get("/admin/api/me")
+def admin_me(actor: AdminActor = Depends(require_admin)) -> dict:
+    now = now_ms()
+    with conn() as c:
+        users = c.execute("SELECT COUNT(*) AS n FROM users WHERE uin NOT IN (?, ?)", (BOT_UIN, SERVICE_UIN)).fetchone()["n"]
+        waiting = c.execute("SELECT COUNT(*) AS n FROM otp WHERE sent=0 AND created>? AND phone NOT LIKE 'mail:%'",
+                            (now - CODE_TTL_MS,)).fetchone()["n"]
+        auto = c.execute("SELECT login, device FROM admins WHERE auto_sms=1 AND enabled=1 AND last_seen>?",
+                         (now - 120_000,)).fetchall()
+    auto_list = [{"login": r["login"], "device": r["device"] or ""} for r in auto]
+    if _super_auto_seen and now - _super_auto_seen[0] < 120_000:
+        auto_list.append({"login": "admin", "device": _super_auto_seen[1]})
+    return {"admin": actor.json(), "perm_names": ADMIN_PERMS, "users": users, "waiting_sms": waiting,
+            "online": manager.online_count(), "auto_sms": auto_list}
+
+
+# ---------------------------------------------------------------- admins (super admin only)
+class AdminIn(BaseModel):
+    login: Optional[str] = None
+    password: Optional[str] = None
+    role: Optional[str] = None
+    perms: Optional[List[str]] = None
+    enabled: Optional[bool] = None
+
+
+def _admin_json(r) -> dict:
+    a = _admin_row_actor(r).json()
+    a.update({"enabled": bool(r["enabled"]), "created": r["created"], "last_seen": r["last_seen"],
+              "device": r["device"] or "", "auto_sms": bool(r["auto_sms"]), "sms_sent": r["sms_sent"]})
+    return a
+
+
+@app.get("/admin/api/admins")
+def admins_list(_: AdminActor = Depends(require_admin)) -> list:
+    with conn() as c:
+        return [_admin_json(r) for r in c.execute("SELECT * FROM admins ORDER BY id").fetchall()]
+
+
+@app.post("/admin/api/admins")
+def admins_create(body: AdminIn, actor: AdminActor = Depends(require_admin)) -> dict:
+    login = (body.login or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.\-]{3,32}", login) or login.lower() == "admin":
+        raise HTTPException(400, "Логин: 3–32 символа (латиница, цифры, _ . -)")
+    if len(body.password or "") < 6:
+        raise HTTPException(400, "Пароль — от 6 символов")
+    role = "super" if body.role == "super" else "admin"
+    perms = [p for p in (body.perms or ["sms"]) if p in ADMIN_PERMS]
+    with conn() as c:
+        if c.execute("SELECT 1 FROM admins WHERE lower(login)=lower(?)", (login,)).fetchone():
+            raise HTTPException(409, "Такой логин уже есть")
+        c.execute("INSERT INTO admins(login, pw_hash, role, perms, created) VALUES(?,?,?,?,?)",
+                  (login, hash_password(body.password), role, json.dumps(perms), now_ms()))
+        r = c.execute("SELECT * FROM admins WHERE lower(login)=lower(?)", (login,)).fetchone()
+    admin_log(actor, f"создал админа {login} ({role}: {', '.join(perms)})")
+    return _admin_json(r)
+
+
+@app.patch("/admin/api/admins/{aid}")
+def admins_edit(aid: int, body: AdminIn, actor: AdminActor = Depends(require_admin)) -> dict:
+    with conn() as c:
+        r = c.execute("SELECT * FROM admins WHERE id=?", (aid,)).fetchone()
+        if not r:
+            raise HTTPException(404, "Админ не найден")
+        if body.password:
+            if len(body.password) < 6:
+                raise HTTPException(400, "Пароль — от 6 символов")
+            c.execute("UPDATE admins SET pw_hash=? WHERE id=?", (hash_password(body.password), aid))
+            c.execute("DELETE FROM admin_tokens WHERE admin_id=?", (aid,))
+        if body.role in ("super", "admin"):
+            c.execute("UPDATE admins SET role=? WHERE id=?", (body.role, aid))
+        if body.perms is not None:
+            c.execute("UPDATE admins SET perms=? WHERE id=?", (json.dumps([p for p in body.perms if p in ADMIN_PERMS]), aid))
+        if body.enabled is not None:
+            c.execute("UPDATE admins SET enabled=? WHERE id=?", (int(body.enabled), aid))
+            if not body.enabled:
+                c.execute("DELETE FROM admin_tokens WHERE admin_id=?", (aid,))
+        r = c.execute("SELECT * FROM admins WHERE id=?", (aid,)).fetchone()
+    admin_log(actor, f"изменил админа {r['login']}")
+    return _admin_json(r)
+
+
+@app.delete("/admin/api/admins/{aid}")
+def admins_delete(aid: int, actor: AdminActor = Depends(require_admin)) -> dict:
+    with conn() as c:
+        r = c.execute("SELECT login FROM admins WHERE id=?", (aid,)).fetchone()
+        c.execute("DELETE FROM admins WHERE id=?", (aid,))
+        c.execute("DELETE FROM admin_tokens WHERE admin_id=?", (aid,))
+        c.execute("UPDATE otp SET claimed_by=NULL WHERE claimed_by=? AND sent=0", (aid,))
+    if r:
+        admin_log(actor, f"удалил админа {r['login']}")
+    return {"ok": True}
+
+
+@app.get("/admin/api/log")
+def admins_log(_: AdminActor = Depends(require_admin)) -> list:
+    with conn() as c:
+        rows = c.execute("SELECT * FROM admin_log ORDER BY id DESC LIMIT 300").fetchall()
+    return [{"login": r["login"], "action": r["action"], "ts": r["ts"]} for r in rows]
+
+
+# ---------------------------------------------------------------- SMS with the code: by hand or automatically
+SMS_CLAIM_MS = 45_000  # a phone that took a code but did not report back: the code goes to another phone
+_super_auto_seen: list = []
+
+
+def sms_text(code: str) -> str:
+    return f"ICQ New: {code} — код для входа. Никому не сообщайте его."
+
+
+def _claim_next(actor: AdminActor) -> Optional[dict]:
+    now = now_ms()
+    with conn() as c:
+        rows = c.execute(
+            "SELECT phone, code, created FROM otp WHERE sent=0 AND created>? AND phone NOT LIKE 'mail:%'"
+            " AND (claimed_by IS NULL OR claimed_at<?) ORDER BY created LIMIT 5",
+            (now - CODE_TTL_MS + 60_000, now - SMS_CLAIM_MS),
+        ).fetchall()
+        for r in rows:
+            cur = c.execute(
+                "UPDATE otp SET claimed_by=?, claimed_at=? WHERE phone=? AND code=? AND sent=0"
+                " AND (claimed_by IS NULL OR claimed_at<?)",
+                (actor.id, now, r["phone"], r["code"], now - SMS_CLAIM_MS),
+            )
+            if cur.rowcount == 1:
+                return {"phone": "+" + r["phone"], "code": r["code"], "text": sms_text(r["code"]),
+                        "age": (now - r["created"]) // 1000}
+    return None
+
+
+@app.get("/admin/api/sms/next")
+async def sms_next(wait: int = 25, device: str = "", actor: AdminActor = Depends(require_admin)):
+    """Auto-SMS phone: waits up to [wait] s for the next code to send; this phone then sends it from its SIM."""
+    with conn() as c:
+        if actor.id:
+            c.execute("UPDATE admins SET auto_sms=1, last_seen=?, device=COALESCE(NULLIF(?, ''), device) WHERE id=?",
+                      (now_ms(), device[:80], actor.id))
+    if not actor.id:
+        _super_auto_seen[:] = [now_ms(), device[:80]]
+    deadline = time.time() + max(0, min(wait, 50))
+    while True:
+        item = await asyncio.to_thread(_claim_next, actor)
+        if item or time.time() >= deadline:
+            return item or Response(status_code=204)
+        await asyncio.sleep(1)
+
+
+class SmsResultIn(BaseModel):
+    phone: str
+    code: str
+    ok: bool
+    error: Optional[str] = None
+
+
+@app.post("/admin/api/sms/result")
+def sms_result(body: SmsResultIn, actor: AdminActor = Depends(require_admin)) -> dict:
+    phone = digits(body.phone)
+    with conn() as c:
+        if body.ok:
+            c.execute("UPDATE otp SET sent=1, sent_by=?, sent_at=?, sms_error=NULL WHERE phone=? AND code=?",
+                      (actor.id, now_ms(), phone, body.code))
+            if actor.id:
+                c.execute("UPDATE admins SET sms_sent=sms_sent+1 WHERE id=?", (actor.id,))
+        else:
+            c.execute("UPDATE otp SET claimed_by=NULL, claimed_at=0, sms_error=? WHERE phone=? AND code=?",
+                      ((body.error or "ошибка")[:200], phone, body.code))
+    return {"ok": True}
+
+
+@app.post("/admin/api/sms/auto")
+def sms_auto(body: dict, actor: AdminActor = Depends(require_admin)) -> dict:
+    """The phone switched automatic SMS on / off."""
+    on = bool(body.get("on"))
+    with conn() as c:
+        if actor.id:
+            c.execute("UPDATE admins SET auto_sms=? WHERE id=?", (int(on), actor.id))
+            if not on:
+                c.execute("UPDATE otp SET claimed_by=NULL WHERE claimed_by=? AND sent=0", (actor.id,))
+    if not actor.id and not on:
+        _super_auto_seen.clear()
+    admin_log(actor, "авто-SMS " + ("включил" if on else "выключил"))
+    return {"ok": True}
 
 
 @app.get("/admin/api/cluster")
@@ -3725,8 +4058,9 @@ def admin_cluster(_: None = Depends(require_admin)) -> dict:
 
 
 @app.post("/admin/api/balance")
-async def admin_balance(body: dict, _: None = Depends(require_admin)) -> dict:
+async def admin_balance(body: dict, actor: AdminActor = Depends(require_admin)) -> dict:
     """Top up (or take back) a user's balance: {who: ID / phone / @username, amount, reason}."""
+    admin_log(actor, f"баланс {body.get('who')}: {body.get('amount')} Gold")
     who = str(body.get("who") or "").strip()
     try:
         amount = int(body.get("amount") or 0)
@@ -3803,7 +4137,9 @@ def admin_pending(_: None = Depends(require_admin)) -> dict:
     now = now_ms()
     with conn() as c:
         rows = c.execute(
-            "SELECT phone, code, created, attempts, sent FROM otp ORDER BY created DESC LIMIT 100"
+            "SELECT o.phone, o.code, o.created, o.attempts, o.sent, o.sent_at, o.sms_error, o.claimed_by, o.claimed_at,"
+            " COALESCE(a.login, CASE WHEN o.sent_by=0 THEN 'admin' END) AS by_login"
+            " FROM otp o LEFT JOIN admins a ON a.id=o.sent_by ORDER BY o.created DESC LIMIT 100"
         ).fetchall()
         users = c.execute("SELECT COUNT(*) AS n FROM users WHERE uin NOT IN (?, ?)", (BOT_UIN, SERVICE_UIN)).fetchone()["n"]
         msgs = c.execute("SELECT COUNT(*) AS n FROM messages WHERE kind<>'system'").fetchone()["n"]
@@ -3816,6 +4152,10 @@ def admin_pending(_: None = Depends(require_admin)) -> dict:
             "age": (now - r["created"]) // 1000,
             "expired": now - r["created"] > CODE_TTL_MS,
             "sent": bool(r["sent"]),
+            "email": r["phone"].startswith("mail:"),
+            "by": r["by_login"] or "",
+            "error": r["sms_error"] or "",
+            "sending": not r["sent"] and r["claimed_by"] is not None and now - (r["claimed_at"] or 0) < SMS_CLAIM_MS,
         }
         for r in rows
     ]
@@ -3823,9 +4163,9 @@ def admin_pending(_: None = Depends(require_admin)) -> dict:
 
 
 @app.post("/admin/api/sent/{phone}")
-def admin_mark_sent(phone: str, _: None = Depends(require_admin)) -> dict:
+def admin_mark_sent(phone: str, actor: AdminActor = Depends(require_admin)) -> dict:
     with conn() as c:
-        c.execute("UPDATE otp SET sent=1 WHERE phone=?", (digits(phone),))
+        c.execute("UPDATE otp SET sent=1, sent_by=?, sent_at=? WHERE phone=?", (actor.id, now_ms(), digits(phone)))
     return {"ok": True}
 
 
@@ -3866,7 +4206,8 @@ def admin_users(q: str = "", _: None = Depends(require_admin)) -> list:
 
 
 @app.post("/admin/api/users/{uin}/ban")
-async def admin_ban(uin: int, ban: bool = True, _: None = Depends(require_admin)) -> dict:
+async def admin_ban(uin: int, ban: bool = True, actor: AdminActor = Depends(require_admin)) -> dict:
+    admin_log(actor, ("заблокировал " if ban else "разблокировал ") + str(uin))
     with conn() as c:
         c.execute("UPDATE users SET banned=? WHERE uin=?", (int(ban), uin))
         if ban:
@@ -3877,7 +4218,8 @@ async def admin_ban(uin: int, ban: bool = True, _: None = Depends(require_admin)
 
 
 @app.post("/admin/api/verify")
-async def admin_verify(body: AdminVerifyIn, _: None = Depends(require_admin)) -> dict:
+async def admin_verify(body: AdminVerifyIn, actor: AdminActor = Depends(require_admin)) -> dict:
+    admin_log(actor, ("дал галочку " if body.on else "снял галочку ") + f"{body.kind} {body.id}")
     with conn() as c:
         if body.kind == "group":
             g = c.execute("SELECT id, name FROM groups WHERE id=?", (body.id,)).fetchone()
@@ -3916,7 +4258,8 @@ def admin_groups(q: str = "", _: None = Depends(require_admin)) -> list:
 
 
 @app.delete("/admin/api/users/{uin}")
-async def admin_delete(uin: int, _: None = Depends(require_admin)) -> dict:
+async def admin_delete(uin: int, actor: AdminActor = Depends(require_admin)) -> dict:
+    admin_log(actor, f"удалил аккаунт {uin}")
     await wipe_user(uin)
     return {"ok": True}
 
