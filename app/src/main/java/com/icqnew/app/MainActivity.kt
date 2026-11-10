@@ -105,13 +105,15 @@ class MainActivity : ComponentActivity() {
                         val callUi by container.callManager.state.collectAsStateWithLifecycle()
                         val callFolded by container.callManager.minimized.collectAsStateWithLifecycle()
                         val voiceUi by container.voicePlayer.state.collectAsStateWithLifecycle()
-                        val barsShown = voiceUi.playingId != null ||
+                        val homeShown by container.homeOnScreen.collectAsStateWithLifecycle()
+                        val barsShown = !homeShown && voiceUi.playingId != null ||
+                            !homeShown &&
                             (callFolded && callUi != null && callUi?.phase != com.icqnew.app.data.call.CallPhase.ENDED &&
                                 callUi?.phase != com.icqnew.app.data.call.CallPhase.INCOMING)
                         Box(Modifier.fillMaxSize()) {
                             androidx.compose.foundation.layout.Column(Modifier.fillMaxSize()) {
                                 // «Вернуться к звонку» + mini player of a voice message (they take the status bar)
-                                com.icqnew.app.presentation.components.AppTopBars(
+                                if (!homeShown) com.icqnew.app.presentation.components.AppTopBars(
                                     container.callManager, container.voicePlayer,
                                 ) { peer -> container.openChatRequest.value = peer }
                                 Box(

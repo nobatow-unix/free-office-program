@@ -314,9 +314,15 @@ fun HomeScreen(
     var folderIndex by rememberSaveable { mutableStateOf(-1) }
     androidx.activity.compose.BackHandler(enabled = profilePage != null) { profilePage = null }
 
+    // while the main screen is shown, «Вернуться к звонку» and the playing voice sit right under «ICQ»
+    DisposableEffect(Unit) {
+        container.homeOnScreen.value = true
+        onDispose { container.homeOnScreen.value = false }
+    }
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
+          Column(Modifier.background(MaterialTheme.colorScheme.background)) {
             if (tab != 4) {
                 TopAppBar(
                     expandedHeight = 50.dp,
@@ -382,6 +388,10 @@ fun HomeScreen(
                     ),
                 )
             }
+            com.icqnew.app.presentation.components.AppTopBars(
+                container.callManager, container.voicePlayer, inline = tab != 4,
+            ) { peer -> onOpenChat(peer) }
+          }
         },
         floatingActionButton = {
             androidx.compose.animation.AnimatedVisibility(
@@ -506,7 +516,8 @@ fun HomeScreen(
             },
             label = "tabs",
             // the lists go under the translucent bottom bar (they get the space as content padding)
-            modifier = Modifier.padding(top = padding.calculateTopPadding()).fillMaxSize(),
+            modifier = Modifier.padding(top = padding.calculateTopPadding())
+                .consumeWindowInsets(PaddingValues(top = padding.calculateTopPadding())).fillMaxSize(),
         ) { shownTab ->
         CompositionLocalProvider(LocalBottomBar provides padding.calculateBottomPadding()) {
         Box(Modifier.fillMaxSize()) {

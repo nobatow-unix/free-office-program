@@ -47,6 +47,9 @@ class AppContainer(private val context: Context) {
     /** A link to a person / group / channel that should be opened (see IcqLinks). */
     val openLinkRequest = MutableStateFlow<String?>(null)
 
+    /** The main screen is shown: the call / voice bars live inside it (under «ICQ»), not above the app. */
+    val homeOnScreen = MutableStateFlow(false)
+
     val store = SessionStore(context)
 
     private val httpClient = HttpClient(OkHttp) {

@@ -53,13 +53,20 @@ import kotlinx.coroutines.delay
  * The first visible bar takes the status-bar inset.
  */
 @Composable
-fun AppTopBars(calls: CallManager, voice: VoicePlayer, onOpenChat: (Long) -> Unit) {
+fun AppTopBars(
+    calls: CallManager,
+    voice: VoicePlayer,
+    /** inline = on the main screen right under «ICQ», as rounded cards (no status-bar inset) */
+    inline: Boolean = false,
+    onOpenChat: (Long) -> Unit,
+) {
     val call by calls.state.collectAsStateWithLifecycle()
     val minimized by calls.minimized.collectAsStateWithLifecycle()
     val v by voice.state.collectAsStateWithLifecycle()
     val c = call
     val showCall = c != null && minimized && c.phase != CallPhase.ENDED && c.phase != CallPhase.INCOMING
     val showVoice = v.playingId != null
+    val card = if (inline) Modifier.padding(horizontal = 10.dp, vertical = 3.dp).clip(RoundedCornerShape(14.dp)) else Modifier
     Column(Modifier.fillMaxWidth()) {
         AnimatedVisibility(showCall, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
             var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -71,8 +78,9 @@ fun AppTopBars(calls: CallManager, voice: VoicePlayer, onOpenChat: (Long) -> Uni
                 } else "соединение…"
             } ?: ""
             Row(
-                Modifier.fillMaxWidth().background(Color(0xFF22C55E)).clickable { calls.expand() }
-                    .statusBarsPadding().padding(horizontal = 14.dp, vertical = 7.dp),
+                Modifier.fillMaxWidth().then(card).background(Color(0xFF22C55E)).clickable { calls.expand() }
+                    .then(if (inline) Modifier else Modifier.statusBarsPadding())
+                    .padding(horizontal = 14.dp, vertical = if (inline) 9.dp else 7.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(Icons.Filled.Call, null, tint = Color.White, modifier = Modifier.size(17.dp))
@@ -87,8 +95,9 @@ fun AppTopBars(calls: CallManager, voice: VoicePlayer, onOpenChat: (Long) -> Uni
         AnimatedVisibility(showVoice, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
             val primary = MaterialTheme.colorScheme.primary
             Column(
-                Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer)
-                    .then(if (showCall) Modifier else Modifier.statusBarsPadding()),
+                Modifier.fillMaxWidth().then(card).background(
+                    if (inline) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f) else MaterialTheme.colorScheme.surfaceContainer,
+                ).then(if (showCall || inline) Modifier else Modifier.statusBarsPadding()),
             ) {
                 Row(
                     Modifier.fillMaxWidth().clickable { if (v.peer != 0L) onOpenChat(v.peer) }
