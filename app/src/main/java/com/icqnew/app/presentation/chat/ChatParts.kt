@@ -584,14 +584,20 @@ private fun Bubble(
                             modifier = Modifier.size(24.dp))
                     }
                     Spacer(Modifier.width(10.dp))
-                    Column {
-                        Text(m.attName ?: "Файл", color = fg, fontWeight = FontWeight.Medium, maxLines = 2)
-                        Text(FileUtils.humanSize(m.attSize), color = fg.copy(alpha = 0.7f), fontSize = 12.sp)
+                    Column(Modifier.widthIn(max = 230.dp)) {
+                        Text(m.attName ?: "Файл", color = fg, fontWeight = FontWeight.Medium, maxLines = 2,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                        // size on the left, time + ticks on the right of the same line (no squeezed corner)
+                        Row(Modifier.widthIn(min = 150.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(FileUtils.humanSize(m.attSize), color = fg.copy(alpha = 0.7f), fontSize = 12.sp)
+                            Spacer(Modifier.weight(1f).widthIn(min = 12.dp))
+                            if (caption.isBlank() && !post) Meta(m, metaColor)
+                        }
                     }
                 }
                 if (caption.isNotBlank()) {
                     CaptionText(caption, fg, mine, primary, post, onLink, onLongPress, Modifier.padding(top = 6.dp)) { Meta(m, metaColor) }
-                } else if (!post) Box(Modifier.align(Alignment.End)) { Meta(m, metaColor) }
+                }
             }
             MessageKind.VOICE -> {
                 val playing = voice.playingId == m.id

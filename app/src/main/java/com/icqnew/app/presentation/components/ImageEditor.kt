@@ -77,7 +77,9 @@ private class DrawLine(val color: Color, val width: Float) {
     val points = mutableStateListOf<Offset>()
 }
 
-private val ASPECTS = listOf("Исходный" to 0f, "1:1" to 1f, "4:3" to 4f / 3f, "3:4" to 3f / 4f, "16:9" to 16f / 9f, "9:16" to 9f / 16f)
+/** -1 = free crop: drag the corners / edges of the frame to any size */
+private const val FREE = -1f
+private val ASPECTS = listOf("Исходный" to 0f, "Свободно" to FREE, "1:1" to 1f, "4:3" to 4f / 3f, "3:4" to 3f / 4f, "16:9" to 16f / 9f, "9:16" to 9f / 16f)
 private val SIZES = listOf("Большой" to 1600, "Оригинал" to 2560, "Средний" to 1080, "Маленький" to 720)
 private val PEN_COLORS = listOf(
     Color.White, Color.Black, Color(0xFFFF3B30), Color(0xFFFF9500), Color(0xFFFFCC00),
@@ -153,6 +155,8 @@ fun ImageEditorDialog(
     var offset by remember { mutableStateOf(Offset.Zero) }
     var filterIndex by remember { mutableIntStateOf(0) }
     var aspectIndex by remember { mutableIntStateOf(0) }
+    // free crop rectangle, relative to the frame (0..1)
+    var crop by remember { mutableStateOf(Rect(0f, 0f, 1f, 1f)) }
     var sizeIndex by remember { mutableIntStateOf(0) }
     var drawing by remember { mutableStateOf(false) }
     var penColor by remember { mutableStateOf(PEN_COLORS[2]) }
@@ -178,7 +182,7 @@ fun ImageEditorDialog(
                 }
                 IconButton(onClick = {
                     rotation = 0; mirror = false; zoom = 1f; offset = Offset.Zero; filterIndex = 0
-                    aspectIndex = 0; lines.clear(); drawing = false
+                    aspectIndex = 0; lines.clear(); drawing = false; crop = Rect(0f, 0f, 1f, 1f)
                 }) { Icon(Icons.Filled.Restore, "Сбросить", tint = Color.White) }
             }
 
@@ -227,8 +231,46 @@ fun ImageEditorDialog(
                                         lines.lastOrNull()?.points?.add(Offset(change.position.x / fw(), change.position.y / fh()))
                                     }
                                 }
+                                .pointerInput(drawing, aspectIndex) {
+                                    // free crop: pull a corner / an edge, or move the whole frame from inside
+                                    if (drawing || ASPECTS[aspectIndex].second != FREE) return@pointerInput
+                                    var grab = 0 // bit 1 left, 2 top, 4 right, 8 bottom; 15 = move
+                                    detectDragGestures(
+                                        onDragStart = { p ->
+                                            val fw = frame.width.toFloat().coerceAtLeast(1f)
+                                            val fh = frame.height.toFloat().coerceAtLeast(1f)
+                                            val x = p.x / fw
+                                            val y = p.y / fh
+                                            val tx = 36.dp.toPx() / fw
+                                            val ty = 36.dp.toPx() / fh
+                                            grab = 0
+                                            if (kotlin.math.abs(x - crop.left) < tx) grab = grab or 1
+                                            if (kotlin.math.abs(x - crop.right) < tx) grab = grab or 4
+                                            if (kotlin.math.abs(y - crop.top) < ty) grab = grab or 2
+                                            if (kotlin.math.abs(y - crop.bottom) < ty) grab = grab or 8
+                                            if (grab == 0 && crop.contains(Offset(x, y))) grab = 15
+                                        },
+                                    ) { change, d ->
+                                        change.consume()
+                                        val fw = frame.width.toFloat().coerceAtLeast(1f)
+                                        val fh = frame.height.toFloat().coerceAtLeast(1f)
+                                        val dx = d.x / fw
+                                        val dy = d.y / fh
+                                        val minW = 0.12f
+                                        crop = if (grab == 15) {
+                                            val mx = dx.coerceIn(-crop.left, 1f - crop.right)
+                                            val my = dy.coerceIn(-crop.top, 1f - crop.bottom)
+                                            crop.translate(mx, my)
+                                        } else Rect(
+                                            if (grab and 1 != 0) (crop.left + dx).coerceIn(0f, crop.right - minW) else crop.left,
+                                            if (grab and 2 != 0) (crop.top + dy).coerceIn(0f, crop.bottom - minW) else crop.top,
+                                            if (grab and 4 != 0) (crop.right + dx).coerceIn(crop.left + minW, 1f) else crop.right,
+                                            if (grab and 8 != 0) (crop.bottom + dy).coerceIn(crop.top + minW, 1f) else crop.bottom,
+                                        )
+                                    }
+                                }
                                 .pointerInput(rotation, bmp, drawing, aspectIndex) {
-                                    if (drawing) return@pointerInput
+                                    if (drawing || ASPECTS[aspectIndex].second == FREE) return@pointerInput
                                     detectTransformGestures { _, pan, z, _ ->
                                         val fw = frame.width.toFloat().coerceAtLeast(1f)
                                         val fh = frame.height.toFloat().coerceAtLeast(1f)
@@ -253,6 +295,28 @@ fun ImageEditorDialog(
                                 }
                                 drawPath(hole, Color.Black.copy(alpha = 0.55f))
                                 drawCircle(Color.White, radius = min(fw, fh) / 2f, style = Stroke(2.dp.toPx()))
+                            } else if (ASPECTS[aspectIndex].second == FREE) {
+                                val r = Rect(crop.left * fw, crop.top * fh, crop.right * fw, crop.bottom * fh)
+                                val outside = Path().apply {
+                                    fillType = PathFillType.EvenOdd
+                                    addRect(Rect(Offset.Zero, size))
+                                    addRect(r)
+                                }
+                                drawPath(outside, Color.Black.copy(alpha = 0.55f))
+                                val c = Color.White.copy(alpha = 0.35f)
+                                for (i in 1..2) {
+                                    drawLine(c, Offset(r.left + r.width * i / 3f, r.top), Offset(r.left + r.width * i / 3f, r.bottom), 1f)
+                                    drawLine(c, Offset(r.left, r.top + r.height * i / 3f), Offset(r.right, r.top + r.height * i / 3f), 1f)
+                                }
+                                drawRect(Color.White, r.topLeft, r.size, style = Stroke(1.5.dp.toPx()))
+                                // corner handles
+                                val h = 18.dp.toPx()
+                                val w = 3.5.dp.toPx()
+                                listOf(r.topLeft to Offset(1f, 1f), r.topRight to Offset(-1f, 1f),
+                                    r.bottomLeft to Offset(1f, -1f), r.bottomRight to Offset(-1f, -1f)).forEach { (p, k) ->
+                                    drawLine(Color.White, p, p + Offset(h * k.x, 0f), w)
+                                    drawLine(Color.White, p, p + Offset(0f, h * k.y), w)
+                                }
                             } else {
                                 // rule-of-thirds grid
                                 val c = Color.White.copy(alpha = 0.35f)
@@ -347,6 +411,7 @@ fun ImageEditorDialog(
                 if (mode == EditMode.PHOTO) {
                     Tool(Icons.Filled.Crop, ASPECTS[aspectIndex].first) {
                         aspectIndex = (aspectIndex + 1) % ASPECTS.size; zoom = 1f; offset = Offset.Zero
+                        crop = Rect(0f, 0f, 1f, 1f)
                     }
                     Tool(Icons.Filled.Brush, if (drawing) "Готово" else "Рисовать", active = drawing) { drawing = !drawing }
                     Tool(Icons.Filled.PhotoSizeSelectLarge, SIZES[sizeIndex].first) { sizeIndex = (sizeIndex + 1) % SIZES.size }
@@ -360,7 +425,8 @@ fun ImageEditorDialog(
                             scope.launch {
                                 val bytes = withContext(Dispatchers.Default) {
                                     render(b, mode, rotation, mirror, zoom, offset, allFilters[filterIndex].matrix,
-                                        ASPECTS[aspectIndex].second, SIZES[sizeIndex].second, lines.toList())
+                                        ASPECTS[aspectIndex].second, SIZES[sizeIndex].second, lines.toList(),
+                                        if (ASPECTS[aspectIndex].second == FREE) crop else null)
                                 }
                                 saving = false
                                 onDone(bytes)
@@ -424,14 +490,14 @@ private fun buildMatrix(
 
 private fun render(
     bmp: Bitmap, mode: EditMode, rotation: Int, mirror: Boolean, zoom: Float, offset: Offset, filter: ColorMatrix?,
-    aspect: Float = 0f, maxSide: Int = 1600, lines: List<DrawLine> = emptyList(),
+    aspect: Float = 0f, maxSide: Int = 1600, lines: List<DrawLine> = emptyList(), crop: Rect? = null,
 ): ByteArray {
     val rotW = if (rotation % 180 == 0) bmp.width else bmp.height
     val rotH = if (rotation % 180 == 0) bmp.height else bmp.width
     val (outW, outH) = if (mode == EditMode.AVATAR) {
         640 to 640
     } else {
-        val ratio = if (aspect > 0f) aspect else rotW.toFloat() / rotH
+        val ratio = if (aspect > 0f) aspect else rotW.toFloat() / rotH // free crop: whole frame, cut below
         val limit = min(maxSide, max(rotW, rotH)).toFloat() // never enlarged above the source
         val w = if (ratio >= 1f) limit else limit * ratio
         val h = if (ratio >= 1f) limit / ratio else limit
@@ -467,8 +533,17 @@ private fun render(
             canvas.drawPath(path, pen)
         }
     }
+    // free crop: cut the chosen part out of the full frame
+    val result = if (crop != null && (crop.left > 0f || crop.top > 0f || crop.right < 1f || crop.bottom < 1f)) {
+        val x = (crop.left * outW).toInt().coerceIn(0, outW - 1)
+        val y = (crop.top * outH).toInt().coerceIn(0, outH - 1)
+        val w = (crop.width * outW).toInt().coerceIn(1, outW - x)
+        val h = (crop.height * outH).toInt().coerceIn(1, outH - y)
+        Bitmap.createBitmap(out, x, y, w, h)
+    } else out
     val bos = ByteArrayOutputStream()
-    out.compress(Bitmap.CompressFormat.JPEG, if (mode == EditMode.AVATAR) 88 else 80, bos)
+    result.compress(Bitmap.CompressFormat.JPEG, if (mode == EditMode.AVATAR) 88 else 80, bos)
+    if (result !== out) result.recycle()
     out.recycle()
     return bos.toByteArray()
 }

@@ -96,6 +96,7 @@ import com.icqnew.app.presentation.components.sameDay
 import com.icqnew.app.presentation.emoji.EmojiPanel
 import com.icqnew.app.presentation.emoji.EmojiText
 import kotlinx.coroutines.delay
+import androidx.compose.animation.core.animateFloat
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import java.io.File
