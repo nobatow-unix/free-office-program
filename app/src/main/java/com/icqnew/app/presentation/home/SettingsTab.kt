@@ -83,6 +83,21 @@ fun SettingsTab(
     val session by vm.session.collectAsStateWithLifecycle()
     val privacy by vm.privacy.collectAsStateWithLifecycle()
     var privacyPick by remember { mutableStateOf<String?>(null) }
+    // approve a sign-in on another phone / on the web by its QR code
+    var scanQr by remember { mutableStateOf(false) }
+    if (scanQr) {
+        val ctx = androidx.compose.ui.platform.LocalContext.current
+        com.icqnew.app.presentation.components.QrScannerDialog(
+            title = "Сканировать QR-код",
+            hint = "Наведите камеру на QR-код на другом телефоне или на icq-new.online",
+            onResult = { text ->
+                scanQr = false
+                if (text.startsWith("icqnew-login:")) vm.approveWebLogin(text)
+                else android.widget.Toast.makeText(ctx, "Это не QR-код входа ICQ New", android.widget.Toast.LENGTH_SHORT).show()
+            },
+            onDismiss = { scanQr = false },
+        )
+    }
     privacyPick?.let { what ->
         val current = if (what == "avatar") privacy.avatarPrivacy else privacy.phonePrivacy
         AlertDialog(
@@ -192,7 +207,7 @@ fun SettingsTab(
                 Icons.Filled.Devices, "Активные сеансы",
                 if (sessions.isEmpty()) null else "${sessions.size}", arrow = true,
             ) { vm.loadSessions(); showDevices = true }
-            Line(Icons.Filled.QrCodeScanner, "Вход по QR-коду", "Профиль → Аккаунт → Сканировать QR-код")
+            Line(Icons.Filled.QrCodeScanner, "Сканировать QR-код", null, arrow = true) { scanQr = true }
         }
 
         // ---- notifications ----
@@ -556,7 +571,12 @@ private fun Line(
         Icon(icon, null, Modifier.size(21.dp), tint = tint ?: MaterialTheme.colorScheme.primary)
         Spacer(Modifier.width(14.dp))
         Text(title, Modifier.weight(1f), color = tint ?: MaterialTheme.colorScheme.onSurface, fontSize = 15.sp)
-        if (value != null) Text(value, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, maxLines = 1)
+        // the value never squeezes the title into a column of letters
+        if (value != null) Text(
+            value, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            modifier = Modifier.padding(start = 8.dp).widthIn(max = 150.dp),
+        )
         if (arrow) Icon(
             Icons.AutoMirrored.Filled.KeyboardArrowRight, null,
             tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f), modifier = Modifier.size(20.dp),

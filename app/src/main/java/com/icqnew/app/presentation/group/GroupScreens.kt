@@ -35,6 +35,11 @@ import androidx.compose.material.icons.filled.RemoveModerator
 import androidx.compose.material.icons.filled.VoiceOverOff
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.QrCode2
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Groups
+import androidx.compose.ui.graphics.asImageBitmap
+import com.icqnew.app.presentation.appContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -446,7 +451,7 @@ fun GroupInfoScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (isChannel) "Канал" else "Группа") },
+                title = {},
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад") } },
                 actions = {
                     if (admin) {
@@ -461,69 +466,113 @@ fun GroupInfoScreen(
     ) { padding ->
         LazyColumn(Modifier.padding(padding).fillMaxSize()) {
             item {
-                Column(Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                // ---------------- header like Telegram ----------------
+                Column(Modifier.fillMaxWidth().padding(16.dp, 4.dp, 16.dp, 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Box {
-                        Avatar(g?.name ?: "?", peer, g?.avatarUrl, false, 108.dp, isGroup = true, isChannel = isChannel)
+                        Avatar(g?.name ?: "?", peer, g?.avatarUrl, false, 100.dp, isGroup = true, isChannel = isChannel)
                         if (admin) {
                             SmallFloatingActionButton(
                                 onClick = { photoPicker.launch("image/*") },
-                                modifier = Modifier.align(Alignment.BottomEnd).size(36.dp),
+                                modifier = Modifier.align(Alignment.BottomEnd).size(34.dp),
                                 shape = CircleShape,
                                 containerColor = MaterialTheme.colorScheme.primary,
                             ) {
-                                Icon(Icons.Filled.CameraAlt, "Фото", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onPrimary)
+                                Icon(Icons.Filled.CameraAlt, "Фото", Modifier.size(17.dp), tint = MaterialTheme.colorScheme.onPrimary)
                             }
                         }
                     }
                     Spacer(Modifier.height(12.dp))
-                    com.icqnew.app.presentation.components.NameLine(g?.name ?: "", verified = g?.verified == true, fontSize = 23.sp)
-                    g?.username?.let { Text("@$it", color = MaterialTheme.colorScheme.primary) }
-                    Text("ID ${g?.id ?: ""}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    com.icqnew.app.presentation.components.NameLine(g?.name ?: "", verified = g?.verified == true, fontSize = 24.sp)
                     Text(
-                        (if (isChannel) subscribers(g?.count ?: 0) else membersText(g?.count ?: g?.members?.size ?: 0)) +
-                            if (g?.isPublic == true) " · публичный" else "",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        when {
+                            isChannel && g?.isPublic == true -> "публичный канал"
+                            isChannel -> "частный канал"
+                            g?.isPublic == true -> "публичная группа · " + membersText(g?.count ?: 0)
+                            else -> membersText(g?.count ?: g?.members?.size ?: 0)
+                        },
+                        fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+                // ---------------- action buttons ----------------
+                val link = g?.let { com.icqnew.app.presentation.IcqLinks.group(it.id, it.username) }
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    ActionTile(if (prefs.muted) Icons.Filled.NotificationsOff else Icons.Filled.Notifications,
+                        if (prefs.muted) "Без звука" else "Звук", Modifier.weight(1f)) { vm.setMuted(!prefs.muted) }
+                    if (link != null) ActionTile(Icons.Filled.Share, "Поделиться", Modifier.weight(1f)) {
+                        val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain")
+                            .putExtra(android.content.Intent.EXTRA_TEXT, link)
+                        context.startActivity(android.content.Intent.createChooser(send, "Поделиться"))
+                    }
+                    if (!isChannel || admin) ActionTile(Icons.Filled.PersonAdd, "Добавить", Modifier.weight(1f)) { adding = true }
+                    if (!owner) ActionTile(Icons.AutoMirrored.Filled.ExitToApp, if (isChannel) "Отписаться" else "Выйти",
+                        Modifier.weight(1f), danger = true) { confirmLeave = true }
+                }
+                Spacer(Modifier.height(12.dp))
+                // ---------------- info card: description (links work), link + QR, ID ----------------
+                InfoCard {
                     if (!g?.about.isNullOrBlank()) {
-                        Spacer(Modifier.height(10.dp))
-                        EmojiText(g?.about ?: "", textAlign = TextAlign.Center)
+                        Column(Modifier.fillMaxWidth().padding(16.dp, 12.dp, 16.dp, 10.dp)) {
+                            com.icqnew.app.presentation.emoji.RichText(
+                                g?.about ?: "", fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface,
+                                linkColor = MaterialTheme.colorScheme.primary,
+                                onLink = { tag, value -> openInfoLink(context, tag, value) },
+                            )
+                            Text("Описание", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        CardDivider()
+                    }
+                    if (g != null && link != null && (g.isPublic || !g.username.isNullOrBlank())) {
+                        var showQr by remember { mutableStateOf(false) }
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .then(if (!g.username.isNullOrBlank()) Modifier.usernameCopy(g.username!!, link) else Modifier)
+                                .padding(16.dp, 10.dp, 6.dp, 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(link.removePrefix("https://"), fontSize = 16.sp, color = MaterialTheme.colorScheme.primary)
+                                Text("Ссылка · нажмите — скопировать", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            IconButton(onClick = { showQr = true }) {
+                                Icon(Icons.Filled.QrCode2, "QR-код", tint = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                        if (showQr) LinkQrDialog(g.name, link) { showQr = false }
+                        CardDivider()
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().clickable {
+                            val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                            cm.setPrimaryClip(android.content.ClipData.newPlainText("ID", g?.id?.toString() ?: ""))
+                            Toast.makeText(context, "ID скопирован", Toast.LENGTH_SHORT).show()
+                        }.padding(16.dp, 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("${g?.id ?: ""}", fontSize = 16.sp)
+                            Text("ID " + if (isChannel) "канала" else "группы", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Icon(Icons.Filled.ContentCopy, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
                     }
                 }
-                if (g != null && !g.username.isNullOrBlank()) {
-                    ListItem(
-                        modifier = Modifier.usernameCopy(g.username!!, com.icqnew.app.presentation.IcqLinks.group(g.id, g.username)),
-                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                        leadingContent = { Icon(Icons.Filled.AlternateEmail, null, tint = MaterialTheme.colorScheme.primary) },
-                        headlineContent = { Text("@" + g.username, color = MaterialTheme.colorScheme.primary, fontSize = 17.sp) },
-                        supportingContent = { Text("нажмите — скопировать, удерживайте — ссылка", fontSize = 12.sp) },
-                    )
+                Spacer(Modifier.height(10.dp))
+                // ---------------- counters card ----------------
+                val members = g?.members.orEmpty()
+                val admins = members.count { it.role == "owner" || it.role == "admin" }
+                InfoCard {
+                    CountRow(Icons.Filled.Groups, if (isChannel) "Подписчики" else "Участники", g?.count ?: members.size)
+                    CardDivider(start = 56.dp)
+                    CountRow(Icons.Filled.AdminPanelSettings, "Администраторы", admins)
+                    if (admin) {
+                        CardDivider(start = 56.dp)
+                        CountRow(Icons.Filled.Settings, if (isChannel) "Настройки канала" else "Настройки группы", null, onOpenSettings)
+                        CardDivider(start = 56.dp)
+                        CountRow(Icons.Filled.Edit, "Изменить", null) { editing = true }
+                    }
                 }
-                if (g != null && (g.isPublic || !g.username.isNullOrBlank())) {
-                    val link = com.icqnew.app.presentation.IcqLinks.group(g.id, g.username)
-                    ListItem(
-                        modifier = Modifier.clickable {
-                            val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain")
-                                .putExtra(android.content.Intent.EXTRA_TEXT, link)
-                            context.startActivity(android.content.Intent.createChooser(send, "Поделиться"))
-                        },
-                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                        leadingContent = { Icon(Icons.Filled.Share, null, tint = MaterialTheme.colorScheme.primary) },
-                        headlineContent = { Text("Поделиться ссылкой") },
-                        supportingContent = { Text(g.username?.let { "@$it" } ?: "ссылка-приглашение", color = MaterialTheme.colorScheme.primary) },
-                    )
-                }
-                ListItem(
-                    modifier = Modifier.clickable { vm.setMuted(!prefs.muted) },
-                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                    leadingContent = {
-                        Icon(
-                            if (prefs.muted) Icons.Filled.NotificationsOff else Icons.Filled.Notifications, null,
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
-                    },
-                    headlineContent = { Text("Уведомления") },
-                    trailingContent = { Switch(checked = !prefs.muted, onCheckedChange = { vm.setMuted(!it) }) },
-                )
                 if (admin && !isChannel) {
                     ListItem(
                         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
@@ -537,24 +586,11 @@ fun GroupInfoScreen(
                         },
                     )
                 }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                if (!isChannel || admin) {
-                    ListItem(
-                        modifier = Modifier.clickable { adding = true },
-                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                        leadingContent = { Icon(Icons.Filled.PersonAdd, null, tint = MaterialTheme.colorScheme.primary) },
-                        headlineContent = {
-                            Text(if (isChannel) "Добавить подписчиков" else "Добавить участников", color = MaterialTheme.colorScheme.primary)
-                        },
-                    )
-                }
-                if (isChannel) {
-                    Text(
-                        if (admin) "Подписчики" else "Администраторы",
-                        fontSize = 13.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 4.dp),
-                    )
-                }
+                Text(
+                    if (isChannel && !admin) "Администраторы" else if (isChannel) "Подписчики" else "Участники",
+                    fontSize = 13.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(start = 16.dp, top = 14.dp, bottom = 4.dp),
+                )
             }
             items(g?.members ?: emptyList(), key = { it.uin }) { u ->
                 ListItem(
@@ -601,8 +637,7 @@ fun GroupInfoScreen(
                 )
             }
             item {
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                ListItem(
+                if (!owner) ListItem(
                     modifier = Modifier.clickable { confirmLeave = true },
                     colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                     leadingContent = { Icon(Icons.AutoMirrored.Filled.ExitToApp, null, tint = MaterialTheme.colorScheme.error) },
@@ -714,6 +749,93 @@ fun GroupInfoScreen(
             dismissButton = { TextButton(onClick = { confirmLeave = false }) { Text("Отмена") } },
         )
     }
+}
+
+@Composable
+private fun ActionTile(
+    icon: ImageVector, label: String, modifier: Modifier, danger: Boolean = false, onClick: () -> Unit,
+) {
+    val tint = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+    Column(
+        modifier.clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .clickable(onClick = onClick).padding(vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Icon(icon, null, tint = tint, modifier = Modifier.size(24.dp))
+        Spacer(Modifier.height(4.dp))
+        Text(label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = tint, maxLines = 1)
+    }
+}
+
+@Composable
+private fun InfoCard(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp).clip(RoundedCornerShape(20.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer),
+        content = content,
+    )
+}
+
+@Composable
+private fun CardDivider(start: androidx.compose.ui.unit.Dp = 16.dp) {
+    HorizontalDivider(Modifier.padding(start = start), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+}
+
+@Composable
+private fun CountRow(icon: ImageVector, title: String, count: Int?, onClick: (() -> Unit)? = null) {
+    Row(
+        Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(24.dp))
+        Spacer(Modifier.width(16.dp))
+        Text(title, fontSize = 16.sp, modifier = Modifier.weight(1f))
+        if (count != null) Text(compactNumber(count), fontSize = 16.sp, color = MaterialTheme.colorScheme.primary)
+    }
+}
+
+private fun compactNumber(n: Int) = "%,d".format(n).replace(',', ' ')
+
+/** Links in a channel description: ICQ links open inside the app, others in the browser. */
+private fun openInfoLink(context: android.content.Context, tag: String, value: String) {
+    val container = context.appContainer()
+    when (tag) {
+        com.icqnew.app.presentation.emoji.RichFormat.TAG_URL -> {
+            val url = if (value.startsWith("http", ignoreCase = true)) value else "https://$value"
+            if (com.icqnew.app.presentation.IcqLinks.parse(url) != null) container.openLinkRequest.value = url
+            else runCatching {
+                context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
+        }
+        com.icqnew.app.presentation.emoji.RichFormat.TAG_MENTION ->
+            container.openLinkRequest.value = "https://" + com.icqnew.app.presentation.IcqLinks.HOST + "/@" + value
+        com.icqnew.app.presentation.emoji.RichFormat.TAG_PHONE -> runCatching {
+            context.startActivity(android.content.Intent(android.content.Intent.ACTION_DIAL, android.net.Uri.parse("tel:$value"))
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+    }
+}
+
+/** QR code of the channel / group link. */
+@Composable
+private fun LinkQrDialog(name: String, link: String, onDismiss: () -> Unit) {
+    val bmp = remember(link) { com.icqnew.app.presentation.auth.qrBitmap(link, 640) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(name, maxLines = 1) },
+        text = {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                Box(Modifier.size(250.dp).clip(RoundedCornerShape(18.dp)).background(Color.White).padding(12.dp)) {
+                    bmp?.let { androidx.compose.foundation.Image(it.asImageBitmap(), "QR-код", Modifier.fillMaxSize()) }
+                }
+                Spacer(Modifier.height(10.dp))
+                Text(link.removePrefix("https://"), color = MaterialTheme.colorScheme.primary)
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Закрыть") } },
+    )
 }
 
 @Composable

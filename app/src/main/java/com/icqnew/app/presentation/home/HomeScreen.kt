@@ -527,22 +527,6 @@ fun HomeScreen(
         Box(Modifier.fillMaxSize()) {
             when (shownTab) {
                 0 -> Column(Modifier.fillMaxSize()) {
-                  // my chat folders as tabs (Settings → Папки с чатами)
-                  if (app.folders.isNotEmpty()) {
-                    Row(
-                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        FilterChip(selected = folderIndex < 0, onClick = { folderIndex = -1 }, label = { Text("Все") })
-                        app.folders.forEachIndexed { i, f ->
-                            val unread = unreadOf(allChats?.filter { it.peer.uin in f.peers })
-                            FilterChip(
-                                selected = folderIndex == i, onClick = { folderIndex = i },
-                                label = { Text(f.name + if (unread > 0) " · $unread" else "") },
-                            )
-                        }
-                    }
-                  }
                   val folder = app.folders.getOrNull(folderIndex)
                   ChatsList(
                     chats = if (folder != null) allChats?.filter { it.peer.uin in folder.peers } else personal,
@@ -563,6 +547,22 @@ fun HomeScreen(
                             onOpen = { i -> storyOpen = stories to i },
                             onAdd = { storyPicker.launch("image/*") },
                         )
+                              // my chat folders (Settings → Папки с чатами): under the stories
+                        if (app.folders.isNotEmpty()) {
+                          Row(
+                              Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 4.dp),
+                              horizontalArrangement = Arrangement.spacedBy(6.dp),
+                          ) {
+                              FilterChip(selected = folderIndex < 0, onClick = { folderIndex = -1 }, label = { Text("Все") })
+                              app.folders.forEachIndexed { i, f ->
+                                  val unread = unreadOf(allChats?.filter { it.peer.uin in f.peers })
+                                  FilterChip(
+                                      selected = folderIndex == i, onClick = { folderIndex = i },
+                                      label = { Text(f.name + if (unread > 0) " · $unread" else "") },
+                                  )
+                              }
+                          }
+                        }
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                         if (archivedChats.isNotEmpty()) ArchiveRow(archivedChats) { showArchive = true }
                     },
