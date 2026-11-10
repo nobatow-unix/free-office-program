@@ -388,9 +388,6 @@ data class StoryDto(
 data class UsernamesDto(val usernames: List<String> = emptyList(), val limit: Int = 2)
 
 @Serializable
-data class UsernameRequest(val username: String)
-
-@Serializable
 data class EmailCodeRequest(val email: String)
 
 @Serializable
