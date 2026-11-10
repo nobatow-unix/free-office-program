@@ -42,6 +42,8 @@ import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.filled.SupportAgent
@@ -77,6 +79,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.icqnew.app.data.remote.GiftDto
 import com.icqnew.app.domain.User
+import kotlinx.coroutines.launch
 import com.icqnew.app.presentation.appContainer
 import com.icqnew.app.presentation.components.Avatar
 import com.icqnew.app.presentation.emoji.EmojiImage
@@ -128,7 +131,14 @@ private fun Row2(icon: ImageVector, title: String, value: String? = null, tint: 
 fun PremiumPage(vm: HomeViewModel, onOpenChat: (Long) -> Unit) {
     val info by vm.premium.collectAsStateWithLifecycle()
     val contacts by vm.contacts.collectAsStateWithLifecycle()
-    LaunchedEffect(Unit) { vm.loadPremium() }
+    // refresh while the page is open: a top-up by the admin shows up by itself
+    LaunchedEffect(Unit) {
+        vm.loadPremium()
+        while (true) {
+            kotlinx.coroutines.delay(15_000)
+            vm.loadPremium(silent = true)
+        }
+    }
     var buy by remember { mutableStateOf<Triple<Int, Int, Long?>?>(null) } // months, price, group
     var giftPremiumTo by remember { mutableStateOf<User?>(null) }
     var pickPremiumFriend by remember { mutableStateOf(false) }
@@ -425,12 +435,84 @@ fun AccountPage(vm: HomeViewModel, onOpen: (String) -> Unit, onLoggedOut: () -> 
     LaunchedEffect(Unit) { vm.loadSessions() }
     var askLogout by remember { mutableStateOf(false) }
     val s = session ?: return
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val container = ctx.appContainer()
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val others by androidx.compose.runtime.produceState(emptyList<com.icqnew.app.data.local.Accounts.Saved>(), s.uin) {
+        value = com.icqnew.app.data.local.Accounts.others(ctx, container.store)
+    }
+    var scanning by remember { mutableStateOf(false) }
+    var passwordDialog by remember { mutableStateOf(false) }
+    if (scanning) {
+        com.icqnew.app.presentation.components.QrScannerDialog(
+            title = "Сканировать QR-код",
+            hint = "Наведите камеру на QR-код на другом телефоне или на icq-new.online на компьютере",
+            onResult = { text ->
+                scanning = false
+                if (text.startsWith("icqnew-login:")) vm.approveWebLogin(text)
+                else android.widget.Toast.makeText(ctx, "Это не QR-код входа ICQ New", android.widget.Toast.LENGTH_SHORT).show()
+            },
+            onDismiss = { scanning = false },
+        )
+    }
+    if (passwordDialog) {
+        PasswordDialog(hasPassword = profile?.hasPassword == true, onDismiss = { passwordDialog = false }) { pw, old ->
+            scope.launch {
+                runCatching { container.chatRepository.setPassword(pw, old) }
+                    .onSuccess {
+                        passwordDialog = false
+                        vm.loadMyProfile(s.uin)
+                        android.widget.Toast.makeText(ctx, "Пароль сохранён", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                    .onFailure { android.widget.Toast.makeText(ctx, it.message ?: "Ошибка", android.widget.Toast.LENGTH_SHORT).show() }
+            }
+        }
+    }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
+        // ---- accounts on this phone ----
+        Card("Аккаунты") {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Avatar(s.name, s.uin, s.avatarUrl, false, 38.dp, storyRing = false)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(s.name, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                    Text("1 · текущий" + (s.username.takeIf { it.isNotBlank() }?.let { " · @$it" } ?: ""), fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Icon(Icons.Filled.Check, null, tint = MaterialTheme.colorScheme.primary)
+            }
+            others.forEachIndexed { i, a ->
+                Row(
+                    Modifier.fillMaxWidth()
+                        .clickable { scope.launch { com.icqnew.app.data.local.Accounts.switchTo(ctx, container.store, a.uin) } }
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Avatar(a.name, a.uin, a.avatarUrl, false, 38.dp, storyRing = false)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(a.name, fontSize = 15.sp)
+                        Text("${i + 2} · нажмите, чтобы переключиться", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+            if (others.size + 1 < com.icqnew.app.data.local.Accounts.MAX) {
+                Row2(Icons.Filled.PersonAdd, "Добавить аккаунт", tint = MaterialTheme.colorScheme.primary) {
+                    scope.launch { com.icqnew.app.data.local.Accounts.startAdding(ctx, container.store) }
+                }
+            }
+            Row2(Icons.Filled.QrCodeScanner, "Сканировать QR-код", "вход на другом устройстве") { scanning = true }
+        }
         Card(null) {
             Row2(Icons.Filled.Phone, "Телефон", if (s.phone.isNotBlank()) "+" + s.phone else "—")
             Row2(Icons.Filled.AlternateEmail, "Имя пользователя", s.username?.takeIf { it.isNotBlank() }?.let { "@$it" } ?: "не задано") { onOpen("edit") }
             Row2(Icons.Filled.Email, "Email", profile?.email?.ifBlank { null } ?: "не указан") { onOpen("edit") }
             Row2(Icons.Filled.Cake, "День рождения", profile?.birthday?.ifBlank { null } ?: "не указан") { onOpen("edit") }
+            Row2(Icons.Filled.Lock, "Пароль", if (profile?.hasPassword == true) "задан · изменить" else "не задан") { passwordDialog = true }
+            Text(
+                "Войти можно по ID ${s.uin}, @имени или почте и паролю.",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(14.dp, 2.dp, 14.dp, 8.dp),
+            )
         }
         Card("ICQ Premium") {
             val until = profile?.premiumUntil ?: 0L
@@ -475,6 +557,34 @@ fun AccountPage(vm: HomeViewModel, onOpen: (String) -> Unit, onLoggedOut: () -> 
             dismissButton = { TextButton(onClick = { askLogout = false }) { Text("Отмена") } },
         )
     }
+}
+
+@Composable
+private fun PasswordDialog(hasPassword: Boolean, onDismiss: () -> Unit, onSave: (String, String?) -> Unit) {
+    var old by remember { mutableStateOf("") }
+    var p1 by remember { mutableStateOf("") }
+    var p2 by remember { mutableStateOf("") }
+    val pt = androidx.compose.ui.text.input.PasswordVisualTransformation()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (hasPassword) "Сменить пароль" else "Задать пароль") },
+        text = {
+            Column {
+                if (hasPassword) OutlinedTextField(old, { old = it.take(128) }, singleLine = true, label = { Text("Текущий пароль") },
+                    visualTransformation = pt, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(p1, { p1 = it.take(128) }, singleLine = true, label = { Text("Новый пароль") },
+                    visualTransformation = pt, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(p2, { p2 = it.take(128) }, singleLine = true, label = { Text("Повторите пароль") },
+                    visualTransformation = pt, isError = p2.isNotEmpty() && p1 != p2, modifier = Modifier.fillMaxWidth())
+                Text("От 6 символов.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = p1.length >= 6 && p1 == p2 && (!hasPassword || old.isNotEmpty()),
+                onClick = { onSave(p1, old.ifEmpty { null }) }) { Text("Сохранить") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
+    )
 }
 
 // ================================================================== Edit
@@ -524,6 +634,7 @@ fun EditAccountPage(vm: HomeViewModel, onPickAvatar: () -> Unit, onDone: () -> U
             hint?.let { Text(it, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 color = if (it.startsWith("✔")) Color(0xFF22C55E) else MaterialTheme.colorScheme.error) }
         }
+        ExtraUsernames()
         Card("О себе") { Field(about, { about = it.take(140) }, "Пара слов о себе") }
         Card("Контакты") {
             Field(email, { email = it.trim().take(80) }, "Email", KeyboardType.Email)
@@ -587,3 +698,46 @@ private fun Field(v: String, on: (String) -> Unit, label: String, kb: KeyboardTy
 /** The support chat ("Поддержка"). */
 fun supportPeer(info: com.icqnew.app.data.remote.PremiumInfoDto?): Long =
     info?.supportUin?.takeIf { it != 0L } ?: com.icqnew.app.domain.BOT_UIN
+
+
+/** More @names for the same account (2, with Premium 5): each one finds you and opens your profile. */
+@Composable
+private fun ExtraUsernames() {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val repo = ctx.appContainer().chatRepository
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var list by remember { mutableStateOf<List<String>>(emptyList()) }
+    var limit by remember { mutableStateOf(2) }
+    var adding by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) { runCatching { repo.myUsernames() }.onSuccess { list = it.first; limit = it.second } }
+    Card("Другие имена пользователя") {
+        list.forEach { u ->
+            Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.AlternateEmail, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(12.dp))
+                Text("@$u", fontSize = 15.sp, modifier = Modifier.weight(1f))
+                TextButton(onClick = {
+                    scope.launch { runCatching { repo.removeUsername(u) }.onSuccess { list = it.first; limit = it.second } }
+                }) { Text("Убрать", color = MaterialTheme.colorScheme.error) }
+            }
+        }
+        if (list.size < limit) {
+            Row(Modifier.fillMaxWidth().padding(end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) { Field(adding, { adding = it.trim().removePrefix("@").take(32); error = null }, "Ещё одно @имя") }
+                TextButton(enabled = adding.length >= 4, onClick = {
+                    scope.launch {
+                        runCatching { repo.addUsername(adding) }
+                            .onSuccess { list = it.first; limit = it.second; adding = "" }
+                            .onFailure { error = it.message ?: "Не удалось" }
+                    }
+                }) { Text("Добавить") }
+            }
+        }
+        error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp)) }
+        Text(
+            "Добавлено ${list.size} из $limit" + if (limit < 5) ". С ICQ Premium — до 5." else ".",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp, 4.dp, 16.dp, 10.dp),
+        )
+    }
+}

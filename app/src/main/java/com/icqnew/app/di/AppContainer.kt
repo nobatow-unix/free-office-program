@@ -36,6 +36,7 @@ import java.util.concurrent.TimeUnit
 /** Hand-written DI container: one instance per process, owned by [com.icqnew.app.IcqApp]. */
 class AppContainer(private val context: Context) {
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val appContext: Context get() = context
 
     @OptIn(ExperimentalSerializationApi::class)
     private val appJson = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
@@ -61,7 +62,7 @@ class AppContainer(private val context: Context) {
         }
     }
 
-    private val db = Room.databaseBuilder(context, IcqDatabase::class.java, "icq.db")
+    private val db = Room.databaseBuilder(context, IcqDatabase::class.java, com.icqnew.app.data.local.Accounts.dbName(context))
         .addMigrations(com.icqnew.app.data.local.MIGRATION_6_7, com.icqnew.app.data.local.MIGRATION_7_8, com.icqnew.app.data.local.MIGRATION_8_9, com.icqnew.app.data.local.MIGRATION_9_10, com.icqnew.app.data.local.MIGRATION_10_11)
         .fallbackToDestructiveMigration()
         .build()

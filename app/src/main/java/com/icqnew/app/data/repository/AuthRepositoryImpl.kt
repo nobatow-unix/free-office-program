@@ -33,8 +33,10 @@ class AuthRepositoryImpl(
         return api.requestCode(phone).inApp
     }
 
-    override suspend fun verify(phone: String, code: String, name: String?): VerifyResult {
-        val r = api.verify(phone, code, name)
+    override suspend fun verify(phone: String, code: String, name: String?): VerifyResult =
+        finish(api.verify(phone, code, name))
+
+    private suspend fun finish(r: com.icqnew.app.data.remote.VerifyResponse): VerifyResult {
         val token = r.token
         val user = r.user
         if (r.needName || token == null || user == null) return VerifyResult.NeedName
@@ -44,7 +46,27 @@ class AuthRepositoryImpl(
         )
         store.setIdentity(user.username, user.verified)
         socket.start()
-        return VerifyResult.Done(Session(token, user.uin, user.name, user.avatarUrl, user.about, user.phone))
+        return VerifyResult.Done(Session(token, user.uin, user.name, user.avatarUrl, user.about, user.phone), r.isNew)
+    }
+
+    override suspend fun requestEmailCode(email: String): Boolean = api.requestEmailCode(email.trim()).inApp
+
+    override suspend fun verifyEmail(email: String, code: String, name: String?): VerifyResult =
+        finish(api.verifyEmail(email.trim(), code, name))
+
+    override suspend fun passwordLogin(login: String, password: String): VerifyResult =
+        finish(api.passwordLogin(login.trim(), password))
+
+    override suspend fun qrStart(): Pair<String, String> = api.qrNew().let { it.code to it.qr }
+
+    override suspend fun qrPoll(code: String): VerifyResult? {
+        val r = api.qrPoll(code)
+        if (!r.ok || r.token == null || r.user == null) return null
+        return finish(com.icqnew.app.data.remote.VerifyResponse(r.token, r.user))
+    }
+
+    override suspend fun setPassword(password: String, old: String?) {
+        api.setPassword(password, old)
     }
 
     override suspend fun updateProfile(name: String, about: String) {

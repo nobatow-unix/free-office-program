@@ -252,6 +252,10 @@ fun ProfileScreen(uin: Long, onBack: () -> Unit, onOpenChat: () -> Unit, onOpenC
             }
             Spacer(Modifier.height(12.dp))
 
+            // gifts this person received
+            val gifts by produceState(emptyList<com.icqnew.app.data.remote.UserGiftDto>(), uin) {
+                value = runCatching { container.chatRepository.userGifts(uin) }.getOrDefault(emptyList())
+            }
             Card(
                 Modifier.padding(horizontal = 16.dp).fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -265,33 +269,6 @@ fun ProfileScreen(uin: Long, onBack: () -> Unit, onOpenChat: () -> Unit, onOpenC
                         leadingContent = { Avatar(u.channelName, -u.channelId, u.channelAvatar, false, 44.dp, isChannel = true) },
                         headlineContent = { com.icqnew.app.presentation.emoji.EmojiText(u.channelName, maxLines = 1, fontSize = 17.sp) },
                         trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
-                    )
-                    HorizontalDivider(Modifier.padding(horizontal = 16.dp))
-                }
-                // gifts this person received
-                val gifts by produceState(emptyList<com.icqnew.app.data.remote.UserGiftDto>(), uin) {
-                    value = runCatching { container.chatRepository.userGifts(uin) }.getOrDefault(emptyList())
-                }
-                if (gifts.isNotEmpty()) {
-                    ListItem(
-                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                        overlineContent = { Text("Подарки · ${gifts.size}") },
-                        headlineContent = {
-                            Row(
-                                Modifier.horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
-                                gifts.take(20).forEach { g ->
-                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                        com.icqnew.app.presentation.emoji.EmojiImage(g.gift.emoji, 34.dp)
-                                        Text(
-                                            g.from?.name?.take(10) ?: "аноним", fontSize = 10.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
-                                        )
-                                    }
-                                }
-                            }
-                        },
                     )
                     HorizontalDivider(Modifier.padding(horizontal = 16.dp))
                 }
@@ -309,6 +286,20 @@ fun ProfileScreen(uin: Long, onBack: () -> Unit, onOpenChat: () -> Unit, onOpenC
                                     .putExtra(android.content.Intent.EXTRA_TEXT, link)
                                 context.startActivity(android.content.Intent.createChooser(send, "Поделиться"))
                             }) { Icon(Icons.Filled.Share, "Поделиться") }
+                        },
+                    )
+                }
+                (card?.user?.usernames ?: user?.usernames)?.takeIf { it.isNotEmpty() }?.let { extra ->
+                    ListItem(
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                        overlineContent = { Text("Также") },
+                        headlineContent = {
+                            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                extra.forEach { un ->
+                                    Text("@$un", fontSize = 15.sp, color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.usernameCopy(un, com.icqnew.app.presentation.IcqLinks.user(un)))
+                                }
+                            }
                         },
                     )
                 }
@@ -391,6 +382,9 @@ fun ProfileScreen(uin: Long, onBack: () -> Unit, onOpenChat: () -> Unit, onOpenC
                 if (prefs.blocked) "Разблокировать" else "Заблокировать",
                 tint = MaterialTheme.colorScheme.error,
             ) { if (prefs.blocked) vm.setBlocked(false) else confirmBlock = true }
+            if (!isBot && uin != com.icqnew.app.domain.SERVICE_UIN) {
+                user?.let { u -> ProfileMediaTabs(user = u, mine = false, gifts = gifts) }
+            }
             Spacer(Modifier.height(24.dp))
         }
     }

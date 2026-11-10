@@ -91,20 +91,6 @@ fun MyProfileTab(
     val color = profileColor(profile?.color ?: 0)
     val headerTint by animateColorAsState(color ?: MaterialTheme.colorScheme.primary, label = "pc")
 
-    var scanning by remember { mutableStateOf(false) }
-    if (scanning) {
-        com.icqnew.app.presentation.components.QrScannerDialog(
-            title = "Вход в веб-версию",
-            hint = "Откройте icq-new.online на компьютере и наведите камеру на QR-код",
-            onResult = { text ->
-                scanning = false
-                if (text.startsWith("icqnew-login:")) vm.approveWebLogin(text)
-                else Toast.makeText(context, "Это не QR-код ICQ New Web", Toast.LENGTH_SHORT).show()
-            },
-            onDismiss = { scanning = false },
-        )
-    }
-
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         // ---- header with the profile colour ----
         Box(
@@ -167,59 +153,25 @@ fun MyProfileTab(
                     InfoRow("@$it", "Имя пользователя · удерживайте — ссылка")
                 }
             }
-            s.about.takeIf { it.isNotBlank() }?.let { InfoRow(it, "О себе") }
-            // gifts I received
-            val gifts by vm.gifts.collectAsStateWithLifecycle()
-            LaunchedEffect(s.uin) { vm.loadGifts(s.uin) }
-            if (gifts.isNotEmpty()) {
-                Row(
-                    Modifier.fillMaxWidth().clickable { onOpen("premium") }.padding(horizontal = 18.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                            gifts.take(8).forEach { g -> com.icqnew.app.presentation.emoji.EmojiImage(g.gift.emoji, 26.dp) }
-                        }
-                        Text("Подарки: ${gifts.size}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
+            profile?.usernames?.forEach { u ->
+                Box(Modifier.usernameCopy(u, com.icqnew.app.presentation.IcqLinks.user(u))) {
+                    InfoRow("@$u", "Дополнительное имя")
                 }
             }
+            s.about.takeIf { it.isNotBlank() }?.let { InfoRow(it, "О себе") }
             profile?.birthday?.takeIf { it.isNotBlank() }?.let { InfoRow("🎂 " + it, "День рождения") }
         }
 
-        // ---- my stories ----
-        Text(
-            "Мои публикации", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 14.sp,
-            modifier = Modifier.padding(start = 24.dp, top = 14.dp, bottom = 6.dp),
+        // ---- Публикации | Подарки ----
+        val gifts by vm.gifts.collectAsStateWithLifecycle()
+        LaunchedEffect(s.uin) { vm.loadGifts(s.uin) }
+        com.icqnew.app.presentation.profile.ProfileMediaTabs(
+            user = profile ?: com.icqnew.app.domain.User(s.uin, s.name, s.avatarUrl, true, 0L, verified = s.verified),
+            mine = true,
+            gifts = gifts,
+            onAdd = onAddStory,
+            onGiftsClick = { onOpen("premium") },
         )
-        LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            item {
-                Box(
-                    Modifier.size(width = 92.dp, height = 140.dp).clip(RoundedCornerShape(16.dp))
-                        .background(MaterialTheme.colorScheme.surfaceContainer).clickable(onClick = onAddStory),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Filled.Add, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp))
-                        Text("Добавить", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
-                    }
-                }
-            }
-            if (myIndex >= 0) {
-                itemsIndexed(stories[myIndex].stories) { _, st ->
-                    Box(
-                        Modifier.size(width = 92.dp, height = 140.dp).clip(RoundedCornerShape(16.dp))
-                            .background(MaterialTheme.colorScheme.surfaceContainerHigh).clickable { onOpenStory(myIndex) },
-                    ) {
-                        StoryThumb(st.attId, st.id)
-                        Text(
-                            "👁 ${st.views}", color = Color.White, fontSize = 12.sp,
-                            modifier = Modifier.align(Alignment.BottomStart).padding(6.dp),
-                        )
-                    }
-                }
-            }
-        }
 
         // ---- menu ----
         Card(
@@ -227,22 +179,8 @@ fun MyProfileTab(
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
         ) {
-            MenuRow(IcqIcons.Contacts, "Контакты", Color(0xFF65AADD)) { onOpen("contacts") }
             MenuRow(Icons.Filled.Bookmark, "Избранное", Color(0xFF22C55E)) { vm.openSaved(onOpenChat) }
-            MenuRow(Icons.Filled.QrCodeScanner, "Веб-версия (вход по QR)", Color(0xFFA695E7)) {
-                scanning = true
-            }
-            MenuRow(Icons.Filled.Share, "Пригласить друзей", Color(0xFFEE7AAE)) {
-                val server = serverUrl
-                val send = Intent(Intent.ACTION_SEND).setType("text/plain")
-                    .putExtra(
-                        Intent.EXTRA_TEXT,
-                        "Пиши мне в ICQ New! " +
-                            (s.username?.takeIf { it.isNotBlank() }?.let { com.icqnew.app.presentation.IcqLinks.user(it) } ?: "Найди меня в ICQ New: ${s.name}") +
-                            "\nСкачать: ${com.icqnew.app.presentation.IcqLinks.SITE}",
-                    )
-                context.startActivity(Intent.createChooser(send, "Пригласить"))
-            }
+            MenuRow(IcqIcons.Contacts, "Контакты", Color(0xFF65AADD)) { onOpen("contacts") }
             MenuRow(Icons.Filled.SupportAgent, "Поддержка", Color(0xFF2F8CFF)) { onOpen("support") }
         }
         Spacer(Modifier.height(90.dp))

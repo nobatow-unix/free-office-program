@@ -293,6 +293,11 @@ def init_db() -> None:
         _add_column(c, "messages", "played INTEGER NOT NULL DEFAULT 0")
         # Premium: balance (whole manats, topped up by the admin), subscription end, account extras
         _add_column(c, "users", "balance INTEGER NOT NULL DEFAULT 0")
+        # publications stay in the profile after their 24 h in the ring; reposts point to the original
+        _add_column(c, "users", "pw_hash TEXT")
+        c.execute(
+            "CREATE TABLE IF NOT EXISTS user_usernames(username TEXT PRIMARY KEY COLLATE NOCASE, uin INTEGER NOT NULL, ts INTEGER NOT NULL)"
+        )
         _add_column(c, "users", "premium_until INTEGER NOT NULL DEFAULT 0")
         _add_column(c, "users", "surname TEXT")
         _add_column(c, "users", "email TEXT")
@@ -387,6 +392,8 @@ def init_db() -> None:
             """
         )
         c.execute("CREATE INDEX IF NOT EXISTS idx_msg_group ON messages(group_id, id)")
+        _add_column(c, "stories", "repost_of INTEGER")
+        _add_column(c, "stories", "repost_uin INTEGER")
         c.execute("UPDATE messages SET rev=id WHERE rev=0")
         c.execute(
             "INSERT OR IGNORE INTO meta(k, v) VALUES('rev', (SELECT COALESCE(MAX(rev), 0) FROM messages))"
@@ -512,7 +519,7 @@ def visible_avatar(row: sqlite3.Row, viewer: int, c: Optional[sqlite3.Connection
 
 def visible_phone(row: sqlite3.Row, viewer: int, c: Optional[sqlite3.Connection] = None) -> str:
     phone = _col(row, "phone", "") or ""
-    if not phone or phone in ("bot", "service") or row["uin"] in (BOT_UIN, SERVICE_UIN):
+    if not phone or phone in ("bot", "service") or phone.startswith("mail:") or row["uin"] in (BOT_UIN, SERVICE_UIN):
         return ""
     if viewer == row["uin"]:
         return phone
@@ -549,6 +556,8 @@ def user_json(row: sqlite3.Row, full: bool = False, viewer: Optional[int] = None
         "verified": bool(row["verified"]),
         "premium": (_col(row, "premium_until", 0) or 0) > now_ms(),
         "surname": _col(row, "surname") or "",
+        "usernames": [r["username"] for r in c.execute("SELECT username FROM user_usernames WHERE uin=? ORDER BY ts",
+                                                        (row["uin"],))] if c is not None else [],
         "color": _col(row, "color", 0) or 0,
         "birthday": _col(row, "birthday") or "",
     }
@@ -569,13 +578,14 @@ def user_json(row: sqlite3.Row, full: bool = False, viewer: Optional[int] = None
     return d
 
 
-def me_json(row: sqlite3.Row) -> dict:
-    d = user_json(row, full=True)
+def me_json(row: sqlite3.Row, c: Optional[sqlite3.Connection] = None) -> dict:
+    d = user_json(row, full=True, c=c)
     d["avatar_privacy"] = _col(row, "avatar_privacy", "all") or "all"
     d["phone_privacy"] = _col(row, "phone_privacy", "contacts") or "contacts"
     d["searchable"] = bool(row["searchable"])
     d["show_online"] = bool(row["show_online"])
-    d["phone"] = row["phone"]
+    d["phone"] = "" if (row["phone"] or "").startswith("mail:") else row["phone"]
+    d["has_password"] = bool(_col(row, "pw_hash"))
     d["balance"] = _col(row, "balance", 0) or 0
     d["premium_until"] = _col(row, "premium_until", 0) or 0
     d["surname"] = _col(row, "surname") or ""
@@ -706,11 +716,13 @@ def require_uin(authorization: Optional[str]) -> int:
 
 
 class CodeRequestIn(BaseModel):
-    phone: str
+    phone: str = ""
+    email: str = ""
 
 
 class VerifyIn(BaseModel):
-    phone: str
+    phone: str = ""
+    email: str = ""
     code: str
     name: Optional[str] = None
     device: Optional[str] = None
@@ -1110,6 +1122,9 @@ async def geo(request: Request, sim: str = Query("")) -> dict:
 
 @app.post("/api/auth/request")
 async def request_code(body: CodeRequestIn) -> dict:
+    email = norm_email(body.email)
+    if email:
+        return await request_email_code(email)
     phone = norm_phone(body.phone)
     if not (9 <= len(phone) <= 15):
         raise HTTPException(400, "Введите номер телефона в международном формате")
@@ -1146,7 +1161,8 @@ async def request_code(body: CodeRequestIn) -> dict:
 
 @app.post("/api/auth/verify")
 async def verify_code(body: VerifyIn, request: Request) -> dict:
-    phone = norm_phone(body.phone)
+    email = norm_email(body.email)
+    phone = ("mail:" + email) if email else norm_phone(body.phone)
     now = now_ms()
     new_user_row = None
     owner_ids: List[int] = []
@@ -1159,9 +1175,14 @@ async def verify_code(body: VerifyIn, request: Request) -> dict:
         if not secrets.compare_digest(row["code"], body.code.strip()):
             c.execute("UPDATE otp SET attempts=attempts+1 WHERE phone=?", (phone,))
             raise HTTPException(400, "Неверный код")
-        user = c.execute("SELECT * FROM users WHERE phone=?", (phone,)).fetchone()
+        if email:
+            user = c.execute("SELECT * FROM users WHERE lower(email)=? OR phone=? ORDER BY (phone=?) DESC LIMIT 1",
+                             (email, phone, phone)).fetchone()
+        else:
+            user = c.execute("SELECT * FROM users WHERE phone=?", (phone,)).fetchone()
         if user is not None and user["banned"]:
             raise HTTPException(403, "Аккаунт заблокирован администратором")
+        created_now = user is None
         if user is None:
             name = (body.name or "").strip()[:40]
             if not name:
@@ -1175,8 +1196,10 @@ async def verify_code(body: VerifyIn, request: Request) -> dict:
                 c.execute(
                     "INSERT INTO users(uin, name, phone, phone_key, last_seen, created, phone_privacy)"
                     " VALUES(?,?,?,?,?,?,'nobody')",
-                    (uin, name, phone, phone_key(phone), now, now),
+                    (uin, name, phone, "" if email else phone_key(phone), now, now),
                 )
+                if email:
+                    c.execute("UPDATE users SET email=? WHERE uin=?", (email, uin))
             user = c.execute("SELECT * FROM users WHERE uin=?", (uin,)).fetchone()
             # a new account is NOT announced and NOT added to anybody's contacts automatically
         c.execute("DELETE FROM otp WHERE phone=?", (phone,))
@@ -1188,7 +1211,156 @@ async def verify_code(body: VerifyIn, request: Request) -> dict:
             (token, user["uin"], now, device, now),
         )
     asyncio.create_task(announce_login(user["uin"], device, client_ip(request), had_sessions))
-    return {"token": token, "user": me_json(user)}
+    with conn() as c:
+        return {"token": token, "user": me_json(user, c), "new": created_now}
+
+
+# ------------------------------------------------- e-mail codes and passwords
+EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[A-Za-z]{2,24}$")
+
+
+def norm_email(raw: Optional[str]) -> str:
+    e = (raw or "").strip().lower()
+    if not e:
+        return ""
+    if not EMAIL_RE.match(e):
+        raise HTTPException(400, "Введите правильный адрес почты")
+    return e
+
+
+def send_email(to: str, subject: str, text: str) -> bool:
+    """SMTP from env: ICQ_SMTP_HOST, ICQ_SMTP_PORT (465 = SSL, else STARTTLS), ICQ_SMTP_USER,
+    ICQ_SMTP_PASS, ICQ_SMTP_FROM. Without them the code goes to the server log / admin."""
+    host = os.environ.get("ICQ_SMTP_HOST")
+    if not host:
+        return False
+    import smtplib
+    from email.message import EmailMessage
+    port = int(os.environ.get("ICQ_SMTP_PORT", "465"))
+    user = os.environ.get("ICQ_SMTP_USER", "")
+    msg = EmailMessage()
+    msg["From"] = os.environ.get("ICQ_SMTP_FROM", user)
+    msg["To"] = to
+    msg["Subject"] = subject
+    msg.set_content(text)
+    try:
+        if port == 465:
+            srv = smtplib.SMTP_SSL(host, port, timeout=15)
+        else:
+            srv = smtplib.SMTP(host, port, timeout=15)
+            srv.starttls()
+        if user:
+            srv.login(user, os.environ.get("ICQ_SMTP_PASS", ""))
+        srv.send_message(msg)
+        srv.quit()
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(f"[SMTP] {to}: {e}", flush=True)
+        return False
+
+
+async def request_email_code(email: str) -> dict:
+    key = "mail:" + email
+    now = now_ms()
+    with conn() as c:
+        u = c.execute("SELECT uin, banned FROM users WHERE lower(email)=? OR phone=? LIMIT 1", (email, key)).fetchone()
+        if u is not None and u["banned"]:
+            raise HTTPException(403, "Аккаунт заблокирован администратором")
+        row = c.execute("SELECT created FROM otp WHERE phone=?", (key,)).fetchone()
+        if row and now - row["created"] < RESEND_MS:
+            wait = (RESEND_MS - (now - row["created"])) // 1000 + 1
+            raise HTTPException(429, f"Подождите {wait} с и запросите код снова")
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        c.execute("INSERT OR REPLACE INTO otp(phone, code, created, attempts, sent) VALUES(?,?,?,0,0)", (key, code, now))
+        in_app = u is not None and c.execute("SELECT 1 FROM tokens WHERE uin=? LIMIT 1", (u["uin"],)).fetchone() is not None
+    print(f"[OTP] {email}: {code}", flush=True)
+    sent = await asyncio.to_thread(
+        send_email, email, f"ICQ New: код {code}",
+        f"Ваш код для входа в ICQ New: {code}\n\nНикому не сообщайте этот код. "
+        "Если вы не запрашивали код — просто проигнорируйте это письмо.",
+    )
+    if in_app:
+        asyncio.create_task(service_send(u["uin"], f"🔑 Код для входа в ICQ New: **{code}**\n\nНикому не сообщайте этот код."))
+    return {"ok": True, "retry_in": RESEND_MS // 1000, "in_app": in_app, "email_sent": sent}
+
+
+def hash_password(pw: str, salt: Optional[bytes] = None) -> str:
+    import hashlib
+    salt = salt or secrets.token_bytes(16)
+    h = hashlib.pbkdf2_hmac("sha256", pw.encode("utf-8"), salt, 200_000)
+    return "pbkdf2$" + salt.hex() + "$" + h.hex()
+
+
+def check_password(pw: str, stored: Optional[str]) -> bool:
+    try:
+        _, salt, h = (stored or "").split("$")
+        return secrets.compare_digest(hash_password(pw, bytes.fromhex(salt)).split("$")[2], h)
+    except ValueError:
+        return False
+
+
+class SetPasswordIn(BaseModel):
+    password: str
+    old: Optional[str] = None
+
+
+@app.post("/api/me/password")
+def set_password(body: SetPasswordIn, authorization: Optional[str] = Header(None)) -> dict:
+    uin = require_uin(authorization)
+    pw = body.password or ""
+    if len(pw) < 6 or len(pw) > 128:
+        raise HTTPException(400, "Пароль: от 6 символов")
+    with conn() as c:
+        row = c.execute("SELECT pw_hash FROM users WHERE uin=?", (uin,)).fetchone()
+        if row["pw_hash"] and not check_password(body.old or "", row["pw_hash"]):
+            raise HTTPException(403, "Неверный текущий пароль")
+        c.execute("UPDATE users SET pw_hash=? WHERE uin=?", (hash_password(pw), uin))
+    return {"ok": True}
+
+
+class PasswordLoginIn(BaseModel):
+    login: str
+    password: str
+    device: Optional[str] = None
+
+
+_pw_fails: Dict[str, list] = {}
+
+
+@app.post("/api/auth/password")
+async def password_login(body: PasswordLoginIn, request: Request) -> dict:
+    """Sign in with ID / @username / e-mail + password."""
+    login = (body.login or "").strip().lstrip("@").lower()
+    if not login:
+        raise HTTPException(400, "Введите ID или имя пользователя")
+    now = now_ms()
+    fails = [t for t in _pw_fails.get(login, []) if now - t < 15 * 60_000]
+    if len(fails) >= 8:
+        raise HTTPException(429, "Слишком много попыток. Попробуйте через 15 минут")
+    with conn() as c:
+        user = None
+        if login.isdigit():
+            user = c.execute("SELECT * FROM users WHERE uin=?", (int(login),)).fetchone()
+        elif "@" in login:
+            user = c.execute("SELECT * FROM users WHERE lower(email)=? OR phone=? LIMIT 1",
+                             (login, "mail:" + login)).fetchone()
+        else:
+            user = user_by_any_username(c, login)
+        if user is None or user["uin"] in (BOT_UIN, SERVICE_UIN) or not check_password(body.password or "", _col(user, "pw_hash")):
+            fails.append(now)
+            _pw_fails[login] = fails
+            raise HTTPException(400, "Неверный логин или пароль")
+        if user["banned"]:
+            raise HTTPException(403, "Аккаунт заблокирован администратором")
+        _pw_fails.pop(login, None)
+        had_sessions = c.execute("SELECT 1 FROM tokens WHERE uin=? LIMIT 1", (user["uin"],)).fetchone() is not None
+        token = secrets.token_hex(32)
+        device = (body.device or "Android")[:60]
+        c.execute("INSERT INTO tokens(token, uin, created, device, last_used) VALUES(?,?,?,?,?)",
+                  (token, user["uin"], now, device, now))
+        res = {"token": token, "user": me_json(user, c), "new": False}
+    asyncio.create_task(announce_login(user["uin"], device + " (по паролю)", client_ip(request), had_sessions))
+    return res
 
 
 async def announce_login(uin: int, device: str, ip: str, had_sessions: bool) -> None:
@@ -1210,7 +1382,7 @@ async def announce_login(uin: int, device: str, ip: str, had_sessions: bool) -> 
 def me(authorization: Optional[str] = Header(None)) -> dict:
     uin = require_uin(authorization)
     with conn() as c:
-        return me_json(c.execute("SELECT * FROM users WHERE uin=?", (uin,)).fetchone())
+        return me_json(c.execute("SELECT * FROM users WHERE uin=?", (uin,)).fetchone(), c)
 
 
 async def broadcast_profile(uin: int) -> None:
@@ -1346,7 +1518,60 @@ def check_username(c: sqlite3.Connection, raw: str, uin: Optional[int] = None, g
     g = c.execute("SELECT id FROM groups WHERE lower(username)=lower(?)", (un,)).fetchone()
     if g and g["id"] != group_id:
         raise HTTPException(409, "Это имя уже занято")
+    x = c.execute("SELECT uin FROM user_usernames WHERE username=?", (un,)).fetchone()
+    if x and (x["uin"] != uin or group_id is not None):
+        raise HTTPException(409, "Это имя уже занято")
     return un
+
+
+def user_by_any_username(c: sqlite3.Connection, un: str) -> Optional[sqlite3.Row]:
+    """@name may be the main username or one of the extra ones."""
+    u = c.execute("SELECT * FROM users WHERE lower(username)=lower(?) AND banned=0", (un,)).fetchone()
+    if u:
+        return u
+    x = c.execute("SELECT uin FROM user_usernames WHERE username=?", (un,)).fetchone()
+    return c.execute("SELECT * FROM users WHERE uin=? AND banned=0", (x["uin"],)).fetchone() if x else None
+
+
+class ExtraUsernameIn(BaseModel):
+    username: str
+
+
+@app.get("/api/me/usernames")
+def my_usernames(authorization: Optional[str] = Header(None)) -> dict:
+    uin = require_uin(authorization)
+    with conn() as c:
+        rows = c.execute("SELECT username FROM user_usernames WHERE uin=? ORDER BY ts", (uin,)).fetchall()
+        return {"usernames": [r["username"] for r in rows], "limit": 5 if is_premium(c, uin) else 2}
+
+
+@app.post("/api/me/usernames")
+async def add_username(body: ExtraUsernameIn, authorization: Optional[str] = Header(None)) -> dict:
+    """Extra @names for the same account (2, with Premium 5)."""
+    uin = require_uin(authorization)
+    with conn() as c:
+        un = check_username(c, body.username, uin=uin)
+        if not un:
+            raise HTTPException(400, "Введите имя")
+        me = c.execute("SELECT username FROM users WHERE uin=?", (uin,)).fetchone()
+        if (me["username"] or "").lower() == un.lower():
+            raise HTTPException(400, "Это ваше основное имя")
+        n = c.execute("SELECT COUNT(*) AS n FROM user_usernames WHERE uin=?", (uin,)).fetchone()["n"]
+        limit = 5 if is_premium(c, uin) else 2
+        if n >= limit:
+            raise HTTPException(402, "Больше имён — с ICQ Premium" if limit == 2 else "Максимум 5 дополнительных имён")
+        c.execute("INSERT OR IGNORE INTO user_usernames(username, uin, ts) VALUES(?,?,?)", (un, uin, now_ms()))
+    await broadcast_profile(uin)
+    return my_usernames(authorization)
+
+
+@app.delete("/api/me/usernames/{name}")
+async def remove_username(name: str, authorization: Optional[str] = Header(None)) -> dict:
+    uin = require_uin(authorization)
+    with conn() as c:
+        c.execute("DELETE FROM user_usernames WHERE username=? AND uin=?", (name.lstrip("@"), uin))
+    await broadcast_profile(uin)
+    return my_usernames(authorization)
 
 
 @app.post("/api/me/username")
@@ -1376,9 +1601,9 @@ def resolve_username(username: str, authorization: Optional[str] = Header(None))
     uin = require_uin(authorization)
     un = username.strip().lstrip("@")
     with conn() as c:
-        u = c.execute("SELECT * FROM users WHERE lower(username)=lower(?) AND banned=0", (un,)).fetchone()
+        u = user_by_any_username(c, un)
         if u:
-            return {"type": "user", "user": user_json(u)}
+            return {"type": "user", "user": user_json(u, c=c)}
         g = c.execute("SELECT * FROM groups WHERE lower(username)=lower(?)", (un,)).fetchone()
         if g:
             d = group_json(c, g, with_members=False)
@@ -1772,9 +1997,9 @@ def can_access_file(c: sqlite3.Connection, uin: int, fid: str) -> Optional[sqlit
         f"SELECT 1 FROM messages m WHERE m.att_id=:f AND m.deleted=0 AND {visible_clause()} LIMIT 1",
         {"f": fid, "u": uin},
     ).fetchone()
-    if not ok:  # a story of somebody I know
-        s = c.execute("SELECT uin FROM stories WHERE att_id=? AND ts>?", (fid, now_ms() - STORY_TTL_MS)).fetchone()
-        if s and (s["uin"] == uin or s["uin"] in related_uins(c, uin)):
+    if not ok:  # a publication: they are shown in profiles
+        s = c.execute("SELECT uin FROM stories WHERE att_id=? LIMIT 1", (fid,)).fetchone()
+        if s:
             ok = True
     return f if ok else None
 
@@ -2795,10 +3020,12 @@ def lookup_phone(phone: str = Query(...), authorization: Optional[str] = Header(
 
 # ---------------------------------------------------------- QR login for the web version
 @app.post("/api/qr/new")
-def qr_new() -> dict:
+def qr_new(device: str = Query("")) -> dict:
     code = secrets.token_urlsafe(18)
     with conn() as c:
         c.execute("INSERT INTO qr_logins(code, created) VALUES(?,?)", (code, now_ms()))
+        if device:
+            _qr_devices[code] = device[:60]
     return {"code": code, "qr": "icqnew-login:" + code}
 
 
@@ -2830,6 +3057,9 @@ def qr_svg(code: str):
     return Response(buf.getvalue(), media_type="image/svg+xml", headers={"Cache-Control": "no-store"})
 
 
+_qr_devices: Dict[str, str] = {}
+
+
 class QrApproveIn(BaseModel):
     code: str
 
@@ -2843,13 +3073,15 @@ async def qr_approve(body: QrApproveIn, request: Request, authorization: Optiona
         if not r or now_ms() - r["created"] > 300_000 or r["token"]:
             raise HTTPException(404, "QR-код устарел, обновите страницу")
         token = secrets.token_hex(32)
+        phone_dev = _qr_devices.pop(code, "")
         agent = (request.headers.get("x-web-agent") or "Web")[:60]
+        label = phone_dev if phone_dev else "Web · " + agent
         c.execute(
             "INSERT INTO tokens(token, uin, created, device, last_used) VALUES(?,?,?,?,?)",
-            (token, uin, now_ms(), "Web · " + agent, now_ms()),
+            (token, uin, now_ms(), label, now_ms()),
         )
         c.execute("UPDATE qr_logins SET token=?, uin=? WHERE code=?", (token, uin, code))
-    asyncio.create_task(announce_login(uin, "Веб-версия (вход по QR-коду)", "", True))
+    asyncio.create_task(announce_login(uin, (phone_dev + " (вход по QR-коду)") if phone_dev else "Веб-версия (вход по QR-коду)", "", True))
     return {"ok": True}
 
 
@@ -2869,8 +3101,8 @@ def cleanup_storage() -> dict:
         rows = c.execute(
             "SELECT id, path, size FROM files f WHERE f.created<? AND"
             " NOT EXISTS (SELECT 1 FROM messages m WHERE m.att_id=f.id) AND"
-            " NOT EXISTS (SELECT 1 FROM stories s WHERE s.att_id=f.id AND s.ts>?)",
-            (day_ago, now_ms() - STORY_TTL_MS),
+            " NOT EXISTS (SELECT 1 FROM stories s WHERE s.att_id=f.id)",
+            (day_ago,),
         ).fetchall()
         for r in rows:
             try:
@@ -2881,7 +3113,6 @@ def cleanup_storage() -> dict:
                 pass
             c.execute("DELETE FROM files WHERE id=?", (r["id"],))
             removed += 1
-        c.execute("DELETE FROM stories WHERE ts<?", (now_ms() - STORY_TTL_MS,))
         c.execute("DELETE FROM story_views WHERE story NOT IN (SELECT id FROM stories)")
         c.execute("DELETE FROM story_comments WHERE story NOT IN (SELECT id FROM stories)")
         c.execute("DELETE FROM reactions WHERE msg_id NOT IN (SELECT id FROM messages)")
@@ -3906,7 +4137,13 @@ class StoryIn(BaseModel):
 
 
 def story_json(c: sqlite3.Connection, r: sqlite3.Row, viewer: int) -> dict:
+    f = c.execute("SELECT mime FROM files WHERE id=?", (r["att_id"],)).fetchone()
+    ro = _col(r, "repost_uin")
+    rn = c.execute("SELECT name FROM users WHERE uin=?", (ro,)).fetchone() if ro else None
     d = {
+        "mime": f["mime"] if f else "image/jpeg",
+        "repost_of": _col(r, "repost_of"),
+        "repost_name": rn["name"] if rn else None,
         "id": r["id"],
         "uin": r["uin"],
         "att_id": r["att_id"],
@@ -3925,13 +4162,55 @@ def story_json(c: sqlite3.Connection, r: sqlite3.Row, viewer: int) -> dict:
     return d
 
 
+@app.get("/api/users/{other}/publications")
+def publications(other: int, kind: str = Query("image"), authorization: Optional[str] = Header(None)) -> list:
+    """Profile → Публикации: Картинки (kind=image), Видео (video), Репост (repost) — all time, newest first."""
+    uin = require_uin(authorization)
+    with conn() as c:
+        if kind == "repost":
+            rows = c.execute("SELECT * FROM stories WHERE uin=? AND repost_of IS NOT NULL ORDER BY id DESC LIMIT 200",
+                             (other,)).fetchall()
+        else:
+            prefix = "video/%" if kind == "video" else "image/%"
+            rows = c.execute(
+                "SELECT s.* FROM stories s JOIN files f ON f.id=s.att_id WHERE s.uin=? AND s.repost_of IS NULL"
+                " AND f.mime LIKE ? ORDER BY s.id DESC LIMIT 200", (other, prefix),
+            ).fetchall()
+        return [story_json(c, r, uin) for r in rows]
+
+
+@app.post("/api/stories/{sid}/repost")
+async def repost_story(sid: int, authorization: Optional[str] = Header(None)) -> dict:
+    """Repost somebody's publication to my profile (and to the ring for 24 h)."""
+    uin = require_uin(authorization)
+    with conn() as c:
+        s = c.execute("SELECT * FROM stories WHERE id=?", (sid,)).fetchone()
+        if not s:
+            raise HTTPException(404, "Публикация не найдена")
+        if s["uin"] == uin:
+            raise HTTPException(400, "Это ваша публикация")
+        orig = _col(s, "repost_of") or s["id"]
+        orig_uin = _col(s, "repost_uin") or s["uin"]
+        if c.execute("SELECT 1 FROM stories WHERE uin=? AND repost_of=?", (uin, orig)).fetchone():
+            raise HTTPException(400, "Вы уже сделали репост")
+        cur = c.execute(
+            "INSERT INTO stories(uin, att_id, text, ts, repost_of, repost_uin) VALUES(?,?,?,?,?,?)",
+            (uin, s["att_id"], s["text"], now_ms(), orig, orig_uin),
+        )
+        row = c.execute("SELECT * FROM stories WHERE id=?", (cur.lastrowid,)).fetchone()
+        result = story_json(c, row, uin)
+        targets = related_uins(c, uin)
+    await manager.send_many(targets + [uin], {"type": "stories"})
+    return result
+
+
 @app.post("/api/stories")
 async def add_story(body: StoryIn, authorization: Optional[str] = Header(None)) -> dict:
     uin = require_uin(authorization)
     with conn() as c:
         f = c.execute("SELECT * FROM files WHERE id=? AND owner=?", (body.att_id, uin)).fetchone()
-        if not f or not f["mime"].startswith("image/"):
-            raise HTTPException(400, "Для публикации нужно фото")
+        if not f or not (f["mime"].startswith("image/") or f["mime"].startswith("video/")):
+            raise HTTPException(400, "Для публикации нужно фото или видео")
         cur = c.execute(
             "INSERT INTO stories(uin, att_id, text, ts) VALUES(?,?,?,?)", (uin, body.att_id, body.text.strip()[:300], now_ms())
         )
@@ -3979,11 +4258,10 @@ class StoryCommentIn(BaseModel):
 
 
 def _story_for(c: sqlite3.Connection, sid: int, uin: int) -> sqlite3.Row:
-    s = c.execute("SELECT * FROM stories WHERE id=? AND ts>?", (sid, now_ms() - STORY_TTL_MS)).fetchone()
+    # publications stay in profiles, so they can be viewed / answered later too
+    s = c.execute("SELECT * FROM stories WHERE id=?", (sid,)).fetchone()
     if not s:
-        raise HTTPException(404, "История не найдена")
-    if s["uin"] != uin and s["uin"] not in related_uins(c, uin):
-        raise HTTPException(403, "Нет доступа")
+        raise HTTPException(404, "Публикация не найдена")
     return s
 
 
@@ -4073,9 +4351,9 @@ async def react_story(sid: int, body: StoryReactIn, authorization: Optional[str]
     uin = require_uin(authorization)
     emoji = body.emoji.strip()[:16]
     with conn() as c:
-        s = c.execute("SELECT * FROM stories WHERE id=? AND ts>?", (sid, now_ms() - STORY_TTL_MS)).fetchone()
+        s = c.execute("SELECT * FROM stories WHERE id=?", (sid,)).fetchone()
         if not s or s["uin"] == uin:
-            raise HTTPException(404, "История не найдена")
+            raise HTTPException(404, "Публикация не найдена")
         c.execute(
             "INSERT INTO story_views(story, uin, ts, reaction) VALUES(?,?,?,?)"
             " ON CONFLICT(story, uin) DO UPDATE SET reaction=excluded.reaction",

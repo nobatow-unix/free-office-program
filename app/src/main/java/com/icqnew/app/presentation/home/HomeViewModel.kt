@@ -30,6 +30,8 @@ class HomeViewModel(
     private val auth: AuthRepository,
     private val settings: SettingsRepository,
     private val syncPhoneBook: SyncPhoneBookUseCase,
+    /** another saved account takes over after logout (the app restarts then); false = go to login */
+    private val afterLogout: suspend (Long) -> Boolean = { false },
 ) : ViewModel() {
 
     private val whileUi = SharingStarted.WhileSubscribed(5_000)
@@ -99,6 +101,17 @@ class HomeViewModel(
                 _message.value = "Публикация готова"
             } catch (e: Exception) {
                 _message.value = "Не удалось опубликовать"
+            }
+        }
+    }
+
+    fun postStoryFile(file: java.io.File, text: String, mime: String) {
+        viewModelScope.launch {
+            try {
+                chatRepo.postStory(file, text, mime)
+                _message.value = "Публикация готова"
+            } catch (e: Exception) {
+                _message.value = e.message ?: "Не удалось опубликовать"
             }
         }
     }
@@ -315,8 +328,17 @@ class HomeViewModel(
     private val _premium = MutableStateFlow<com.icqnew.app.data.remote.PremiumInfoDto?>(null)
     val premium: StateFlow<com.icqnew.app.data.remote.PremiumInfoDto?> = _premium.asStateFlow()
 
-    fun loadPremium() {
-        viewModelScope.launch { runCatching { chatRepo.premiumInfo() }.onSuccess { _premium.value = it }.onFailure { _message.value = it.userMessage() } }
+    fun loadPremium(silent: Boolean = false) {
+        viewModelScope.launch {
+            runCatching { chatRepo.premiumInfo() }
+                .onSuccess { p ->
+                    val changed = _premium.value?.balance != p.balance || _premium.value?.premiumUntil != p.premiumUntil
+                    _premium.value = p
+                    // balance / Premium changed (top-up by the admin, a purchase): the profile shows it too
+                    if (changed) session.value?.uin?.let { loadMyProfile(it) }
+                }
+                .onFailure { if (!silent) _message.value = it.userMessage() }
+        }
     }
 
     fun buyPremium(months: Int, group: Long? = null, to: Long? = null) {
@@ -373,7 +395,7 @@ class HomeViewModel(
         viewModelScope.launch {
             try {
                 chatRepo.approveWebLogin(qr)
-                _message.value = "Готово: веб-версия открыта на компьютере"
+                _message.value = "Готово: вход на другом устройстве подтверждён"
             } catch (e: Exception) {
                 _message.value = e.userMessage()
             }
@@ -436,16 +458,18 @@ class HomeViewModel(
 
     fun logout(onDone: () -> Unit) {
         viewModelScope.launch {
+            val uin = session.value?.uin ?: 0L
             auth.logout()
-            onDone()
+            if (!afterLogout(uin)) onDone()
         }
     }
 
     fun deleteAccount(onDone: () -> Unit) {
         viewModelScope.launch {
             try {
+                val uin = session.value?.uin ?: 0L
                 auth.deleteAccount()
-                onDone()
+                if (!afterLogout(uin)) onDone()
             } catch (e: Exception) {
                 _message.value = e.userMessage()
             }

@@ -364,14 +364,38 @@ fun ChatScreen(
             },
         )
     }
+    // the app's own camera (photo → editor, video → send sheet)
+    var showCamera by remember { mutableStateOf(false) }
+    if (showCamera) {
+        InAppCamera(
+            onDismiss = { showCamera = false },
+            onPhoto = { f -> showCamera = false; cameraFile = f; editPhoto = Uri.fromFile(f) },
+            onVideo = { f ->
+                showCamera = false
+                pendingFiles = pendingFiles + PendingFile(f, "video_" + System.currentTimeMillis() + ".mp4", "video/mp4")
+            },
+        )
+    }
+    // a photo already in the send sheet can be edited again (draw, crop, size)
+    var reEdit by remember { mutableStateOf<PendingFile?>(null) }
+    reEdit?.let { pf ->
+        com.icqnew.app.presentation.components.ImageEditorDialog(
+            uri = Uri.fromFile(pf.file),
+            mode = com.icqnew.app.presentation.components.EditMode.PHOTO,
+            doneLabel = "Готово",
+            onCancel = { reEdit = null },
+            onDone = { bytes ->
+                reEdit = null
+                val out = FileUtils.newCameraFile(context)
+                out.writeBytes(bytes)
+                val np = PendingFile(out, pf.name.substringBeforeLast('.') + ".jpg", "image/jpeg")
+                pendingFiles = pendingFiles.map { if (it == pf) np else it }
+                pf.file.delete()
+            },
+        )
+    }
     fun openCamera() {
-        try {
-            val f = FileUtils.newCameraFile(context)
-            cameraFile = f
-            camera.launch(FileProvider.getUriForFile(context, context.packageName + ".files", f))
-        } catch (e: Exception) {
-            Toast.makeText(context, "Камера недоступна", Toast.LENGTH_SHORT).show()
-        }
+        showCamera = true
     }
     val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         if (ok) openCamera() else Toast.makeText(context, "Нужен доступ к камере", Toast.LENGTH_SHORT).show()
@@ -999,6 +1023,7 @@ fun ChatScreen(
     if (pendingFiles.isNotEmpty()) {
         SendPreviewSheet(
             items = pendingFiles,
+            onEdit = { p -> reEdit = p },
             onRemove = { p -> pendingFiles = pendingFiles - p; p.file.delete() },
             onCancel = { pendingFiles.forEach { it.file.delete() }; pendingFiles = emptyList() },
             onSend = { caption ->

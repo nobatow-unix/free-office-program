@@ -41,6 +41,39 @@ class IcqApi(private val client: HttpClient, private val store: SessionStore) {
 
     suspend fun me(): UserDto = get("/api/me")
 
+    // ---- e-mail codes, passwords, QR sign-in on this phone ----
+    suspend fun requestEmailCode(email: String): OkResponse = post("/api/auth/request", EmailCodeRequest(email))
+
+    suspend fun verifyEmail(email: String, code: String, name: String?): VerifyResponse =
+        post("/api/auth/verify", EmailVerifyRequest(email, code, name, deviceName()))
+
+    suspend fun passwordLogin(login: String, password: String): VerifyResponse =
+        post("/api/auth/password", PasswordLoginRequest(login, password, deviceName()))
+
+    suspend fun setPassword(password: String, old: String?): OkResponse = post("/api/me/password", SetPasswordRequest(password, old))
+
+    suspend fun qrNew(): QrNewDto {
+        val s = store.snapshot()
+        return unwrap(client.post(s.serverUrl + "/api/qr/new") { parameter("device", deviceName()) })
+    }
+
+    suspend fun qrPoll(code: String): QrPollDto = get("/api/qr/$code")
+
+    // ---- extra @usernames ----
+    suspend fun myUsernames(): UsernamesDto = get("/api/me/usernames")
+
+    suspend fun addUsername(u: String): UsernamesDto = post("/api/me/usernames", UsernameRequest(u))
+
+    suspend fun removeUsername(u: String): UsernamesDto {
+        val s = store.snapshot()
+        return unwrap(client.delete(s.serverUrl + "/api/me/usernames/" + u) { s.token?.let { bearerAuth(it) } })
+    }
+
+    // ---- profile publications ----
+    suspend fun publications(uin: Long, kind: String): List<StoryDto> = get("/api/users/$uin/publications", mapOf("kind" to kind))
+
+    suspend fun repostStory(id: Long): StoryDto = post("/api/stories/$id/repost", OkResponse())
+
     suspend fun updateProfile(name: String, about: String?): UserDto = post("/api/me", ProfileRequest(name, about))
 
     suspend fun updateProfileExtra(

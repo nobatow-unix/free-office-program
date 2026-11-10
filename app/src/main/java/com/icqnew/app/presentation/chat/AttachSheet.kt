@@ -51,6 +51,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PlayArrow
@@ -374,6 +375,7 @@ fun SendPreviewSheet(
     items: List<PendingFile>,
     onRemove: (PendingFile) -> Unit,
     onCancel: () -> Unit,
+    onEdit: (PendingFile) -> Unit = {},
     onSend: (String) -> Unit,
 ) {
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -420,6 +422,13 @@ fun SendPreviewSheet(
                                 .background(Color.Black.copy(alpha = 0.55f)).clickable { onRemove(p) },
                             contentAlignment = Alignment.Center,
                         ) { Icon(Icons.Filled.Close, "Убрать", tint = Color.White, modifier = Modifier.size(14.dp)) }
+                        if (p.mime.startsWith("image/") && !p.mime.contains("gif")) Box(
+                            Modifier.align(Alignment.BottomStart).padding(6.dp).size(30.dp).clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.55f)).clickable { onEdit(p) },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(Icons.Filled.Brush, "Рисовать / обрезать", tint = Color.White, modifier = Modifier.size(17.dp))
+                        }
                     }
                 }
             }

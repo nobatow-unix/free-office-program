@@ -495,16 +495,38 @@ class ChatRepositoryImpl(
         _stories.value = api.stories().map { g ->
             StoryGroup(
                 g.user.toDomain(),
-                g.stories.map { Story(it.id, it.uin, it.attId, it.text, it.ts, it.seen, it.views, it.myReaction, it.reactions, it.comments) },
+                g.stories.map { it.toStory() },
                 g.allSeen,
             )
         }
     }
 
-    override suspend fun postStory(file: File, text: String) {
-        val up = api.upload(file, file.name, "image/jpeg", 0)
+    private fun com.icqnew.app.data.remote.StoryDto.toStory() =
+        Story(id, uin, attId, text, ts, seen, views, myReaction, reactions, comments, mime, repostOf, repostName)
+
+    override suspend fun postStory(file: File, text: String, mime: String) {
+        val up = api.upload(file, file.name, mime, 0)
         api.addStory(up.id, text)
         refreshStories()
+    }
+
+    override suspend fun publications(uin: Long, kind: String): List<Story> = api.publications(uin, kind).map { it.toStory() }
+
+    override suspend fun repostStory(id: Long) {
+        api.repostStory(id)
+        refreshStories()
+    }
+
+    override suspend fun myUsernames(): Pair<List<String>, Int> = api.myUsernames().let { it.usernames to it.limit }
+
+    override suspend fun addUsername(name: String): Pair<List<String>, Int> =
+        api.addUsername(name.trim().removePrefix("@")).let { it.usernames to it.limit }
+
+    override suspend fun removeUsername(name: String): Pair<List<String>, Int> =
+        api.removeUsername(name).let { it.usernames to it.limit }
+
+    override suspend fun setPassword(password: String, old: String?) {
+        api.setPassword(password, old)
     }
 
     override suspend fun markStorySeen(id: Long) {
@@ -822,7 +844,10 @@ class ChatRepositoryImpl(
 
     override suspend fun setDefaultTtl(seconds: Int): Int = api.setDefaultTtl(seconds).seconds
 
-    override suspend fun fetchUserFresh(uin: Long): User? = runCatching { api.user(uin).toDomain() }.getOrNull()
+    // my own profile comes from /api/me: only there are balance, Premium end, e-mail
+    override suspend fun fetchUserFresh(uin: Long): User? = runCatching {
+        if (uin == store.snapshot().uin) api.me().toDomain() else api.user(uin).toDomain()
+    }.getOrNull()
 
     override suspend fun publicPosts(gid: Long): List<ChatMessage> = runCatching {
         val me = store.snapshot().uin

@@ -35,6 +35,8 @@ data class UserDto(
     val email: String = "",
     val balance: Int = 0,
     @SerialName("premium_until") val premiumUntil: Long = 0,
+    val usernames: List<String> = emptyList(),
+    @SerialName("has_password") val hasPassword: Boolean = false,
 )
 
 // ---- Premium ----
@@ -149,6 +151,7 @@ data class VerifyResponse(
     val token: String? = null,
     val user: UserDto? = null,
     @SerialName("need_name") val needName: Boolean = false,
+    @SerialName("new") val isNew: Boolean = false,
 )
 
 @Serializable
@@ -376,7 +379,34 @@ data class StoryDto(
     @SerialName("my_reaction") val myReaction: String = "",
     val reactions: Int = 0,
     val comments: Int = 0,
+    val mime: String = "image/jpeg",
+    @SerialName("repost_of") val repostOf: Long? = null,
+    @SerialName("repost_name") val repostName: String = "",
 )
+
+@Serializable
+data class UsernamesDto(val usernames: List<String> = emptyList(), val limit: Int = 2)
+
+@Serializable
+data class UsernameRequest(val username: String)
+
+@Serializable
+data class EmailCodeRequest(val email: String)
+
+@Serializable
+data class EmailVerifyRequest(val email: String, val code: String, val name: String? = null, val device: String? = null)
+
+@Serializable
+data class PasswordLoginRequest(val login: String, val password: String, val device: String? = null)
+
+@Serializable
+data class SetPasswordRequest(val password: String, val old: String? = null)
+
+@Serializable
+data class QrNewDto(val code: String, val qr: String)
+
+@Serializable
+data class QrPollDto(val ok: Boolean = false, val token: String? = null, val user: UserDto? = null)
 
 @Serializable
 data class StoryCommentDto(val id: Long, val text: String, val ts: Long, val user: UserDto)
@@ -451,5 +481,5 @@ fun UserDto.toDomain() = User(
     uin, name, avatarUrl, online, lastSeen, about, username = username, verified = verified,
     birthday = birthday, color = color, channelId = channel?.id ?: 0, channelName = channel?.name.orEmpty(),
     channelAvatar = channel?.avatarUrl, premium = premium, surname = surname, email = email,
-    balance = balance, premiumUntil = premiumUntil,
+    balance = balance, premiumUntil = premiumUntil, usernames = usernames, hasPassword = hasPassword,
 )

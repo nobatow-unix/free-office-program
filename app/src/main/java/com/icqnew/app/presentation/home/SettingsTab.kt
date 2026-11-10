@@ -149,24 +149,12 @@ fun SettingsTab(
             .background(MaterialTheme.colorScheme.surfaceContainerLow)
             .verticalScroll(rememberScrollState()),
     ) {
-        // ---- me (compact; the full profile is on the "Профиль" tab) ----
-        Row(
-            Modifier.fillMaxWidth().clickable { nameInput = name; aboutInput = session?.about.orEmpty(); editProfile = true }
-                .padding(horizontal = 20.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(Modifier.clip(CircleShape).clickable(onClick = onPickAvatar)) {
-                Avatar(name, uin, session?.avatarUrl, false, 58.dp, storyRing = false)
+        // ---- on top: app icon + support (the profile itself is edited on the «Профиль» tab) ----
+        Section(null) {
+            Line(Icons.Filled.Apps, "Значок приложения", if (premium) null else "🔒 Premium", arrow = true) { showIcons = true }
+            Line(Icons.Filled.SupportAgent, "Поддержка", "вопросы, пополнение баланса", arrow = true) {
+                onOpenChat(supportPeer(vm.premium.value))
             }
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                com.icqnew.app.presentation.components.NameLine(name, verified = session?.verified == true, fontSize = 19.sp)
-                Text(
-                    session?.username?.takeIf { it.isNotBlank() }?.let { "@$it" } ?: "Задайте имя пользователя",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp,
-                )
-            }
-            Icon(Icons.Filled.Edit, "Изменить", tint = MaterialTheme.colorScheme.primary)
         }
 
         // ---- privacy ----
@@ -204,7 +192,7 @@ fun SettingsTab(
                 Icons.Filled.Devices, "Активные сеансы",
                 if (sessions.isEmpty()) null else "${sessions.size}", arrow = true,
             ) { vm.loadSessions(); showDevices = true }
-            Line(Icons.Filled.QrCodeScanner, "Веб-версия", "вход по QR-коду в профиле")
+            Line(Icons.Filled.QrCodeScanner, "Вход по QR-коду", "Профиль → Аккаунт → Сканировать QR-код")
         }
 
         // ---- notifications ----
@@ -275,7 +263,6 @@ fun SettingsTab(
                     }
                 }
             }
-            Line(Icons.Filled.Apps, "Значок приложения", if (premium) null else "🔒 Premium", arrow = true) { showIcons = true }
         }
 
         Section("Язык") {
@@ -296,9 +283,6 @@ fun SettingsTab(
         }
 
         Section(null) {
-            Line(Icons.Filled.SupportAgent, "Поддержка", "вопросы, пополнение баланса", arrow = true) {
-                onOpenChat(supportPeer(vm.premium.value))
-            }
             Line(Icons.Filled.Share, "Пригласить друзей", null, arrow = true) {
                 val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain").putExtra(
                     android.content.Intent.EXTRA_TEXT,

@@ -38,6 +38,8 @@ data class User(
     /** my own profile only */
     val balance: Int = 0,
     val premiumUntil: Long = 0,
+    val usernames: List<String> = emptyList(),
+    val hasPassword: Boolean = false,
 ) {
     val isAdmin: Boolean get() = role == "owner" || role == "admin"
     fun isMutedNow(): Boolean = mutedUntil < 0 || mutedUntil > System.currentTimeMillis()
@@ -203,7 +205,12 @@ data class Story(
     val myReaction: String = "",
     val reactions: Int = 0,
     val comments: Int = 0,
-)
+    val mime: String = "image/jpeg",
+    val repostOf: Long? = null,
+    val repostName: String = "",
+) {
+    val isVideo: Boolean get() = mime.startsWith("video/")
+}
 
 data class StoryComment(val id: Long, val text: String, val ts: Long, val user: User)
 
@@ -294,7 +301,8 @@ enum class ConnectionState { CONNECTING, CONNECTED, DISCONNECTED }
 
 sealed interface VerifyResult {
     object NeedName : VerifyResult
-    data class Done(val session: Session) : VerifyResult
+    /** [isNew] = the account was created just now (the app then asks for @username + password) */
+    data class Done(val session: Session, val isNew: Boolean = false) : VerifyResult
 }
 
 /** All user-changeable privacy options. server* ones live on the server, local* only on this phone. */

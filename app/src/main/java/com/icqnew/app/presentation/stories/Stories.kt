@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.automirrored.filled.Comment
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -64,32 +65,32 @@ fun StoriesRow(
 ) {
     val myIndex = groups.indexOfFirst { it.user.uin == me?.uin }
     LazyRow(
-        Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 6.dp),
         contentPadding = PaddingValues(horizontal = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item {
-            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(68.dp)) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(56.dp)) {
                 Box(Modifier.clickable { if (myIndex >= 0) onOpen(myIndex) else onAdd() }) {
-                    Ring(seen = myIndex < 0) { Avatar(me?.name ?: "?", me?.uin ?: 0, me?.avatarUrl, false, 58.dp, storyRing = false) }
+                    Ring(seen = myIndex < 0) { Avatar(me?.name ?: "?", me?.uin ?: 0, me?.avatarUrl, false, 44.dp, storyRing = false) }
                     Box(
-                        Modifier.align(Alignment.BottomEnd).size(22.dp).clip(CircleShape)
+                        Modifier.align(Alignment.BottomEnd).size(18.dp).clip(CircleShape)
                             .background(MaterialTheme.colorScheme.primary)
                             .border(2.dp, MaterialTheme.colorScheme.background, CircleShape)
                             .clickable(onClick = onAdd),
                         contentAlignment = Alignment.Center,
-                    ) { Icon(Icons.Filled.Add, "Добавить", tint = Color.White, modifier = Modifier.size(14.dp)) }
+                    ) { Icon(Icons.Filled.Add, "Добавить", tint = Color.White, modifier = Modifier.size(12.dp)) }
                 }
-                Spacer(Modifier.height(4.dp))
-                Text("Моя публикация", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(2.dp))
+                Text("Моя публикация", fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
         itemsIndexed(groups) { i, g ->
             if (g.user.uin == me?.uin) return@itemsIndexed
-            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(68.dp).clickable { onOpen(i) }) {
-                Ring(seen = g.allSeen) { Avatar(g.user.name, g.user.uin, g.user.avatarUrl, false, 58.dp, storyRing = false) }
-                Spacer(Modifier.height(4.dp))
-                EmojiText(g.user.name.substringBefore(' '), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(56.dp).clickable { onOpen(i) }) {
+                Ring(seen = g.allSeen) { Avatar(g.user.name, g.user.uin, g.user.avatarUrl, false, 44.dp, storyRing = false) }
+                Spacer(Modifier.height(2.dp))
+                EmojiText(g.user.name.substringBefore(' '), fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
@@ -98,12 +99,12 @@ fun StoriesRow(
 @Composable
 private fun Ring(seen: Boolean, content: @Composable () -> Unit) {
     Box(
-        Modifier.size(68.dp).clip(CircleShape)
+        Modifier.size(52.dp).clip(CircleShape)
             .then(
                 if (seen) Modifier.border(2.dp, MaterialTheme.colorScheme.outline, CircleShape)
-                else Modifier.border(3.dp, RING, CircleShape)
+                else Modifier.border(2.5.dp, RING, CircleShape)
             )
-            .padding(5.dp),
+            .padding(4.dp),
         contentAlignment = Alignment.Center,
     ) { content() }
 }
@@ -143,14 +144,16 @@ fun StoryViewer(groups: List<StoryGroup>, start: Int, myUin: Long, onClose: () -
     }
 
     LaunchedEffect(story.id) {
-        file = container.mediaCache.file(story.attId, "story_${story.id}.jpg")
+        file = container.mediaCache.file(story.attId, if (story.isVideo) "story_${story.id}.mp4" else "story_${story.id}.jpg")
         if (!mine && !story.seen) container.chatRepository.markStorySeen(story.id)
     }
     var commentsOpen by remember { mutableStateOf(false) }
     var typing by remember { mutableStateOf(false) }
-    LaunchedEffect(story.id, file, paused, viewers, commentsOpen, typing) {
-        if (file != null && !paused && viewers == null && !commentsOpen && !typing) {
-            val left = ((1f - progress.value) * 5_500).toInt().coerceAtLeast(1)
+    var videoMs by remember(story.id) { mutableIntStateOf(0) }
+    LaunchedEffect(story.id, file, paused, viewers, commentsOpen, typing, videoMs) {
+        val total = if (story.isVideo) videoMs else 5_500
+        if (file != null && total > 0 && !paused && viewers == null && !commentsOpen && !typing) {
+            val left = ((1f - progress.value) * total).toInt().coerceAtLeast(1)
             progress.animateTo(1f, tween(left, easing = LinearEasing))
             next()
         }
@@ -181,7 +184,9 @@ fun StoryViewer(groups: List<StoryGroup>, start: Int, myUin: Long, onClose: () -
         ) {
             androidx.compose.animation.Crossfade(targetState = file, label = "story", modifier = Modifier.fillMaxSize()) { f ->
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    if (f != null) {
+                    if (f != null && story.isVideo) {
+                        StoryVideo(f, paused || viewers != null || commentsOpen || typing) { videoMs = it }
+                    } else if (f != null) {
                         AsyncImage(model = f, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
                     } else {
                         CircularProgressIndicator(color = Color.White)
@@ -212,7 +217,19 @@ fun StoryViewer(groups: List<StoryGroup>, start: Int, myUin: Long, onClose: () -
                     Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
                         NameLine(if (mine) "Моя публикация" else group.user.name, group.user.verified, color = Color.White, fontSize = 15.sp)
-                        Text(formatListTime(story.ts), color = Color.White.copy(alpha = 0.75f), fontSize = 12.sp)
+                        Text(
+                            formatListTime(story.ts) + if (story.repostName.isNotBlank()) "  ·  🔁 " + story.repostName else "",
+                            color = Color.White.copy(alpha = 0.75f), fontSize = 12.sp, maxLines = 1,
+                        )
+                    }
+                    if (!mine) {
+                        IconButton(onClick = {
+                            scope.launch {
+                                runCatching { container.chatRepository.repostStory(story.id) }
+                                    .onSuccess { android.widget.Toast.makeText(context, "Репост в ваш профиль", android.widget.Toast.LENGTH_SHORT).show() }
+                                    .onFailure { android.widget.Toast.makeText(context, it.message ?: "Не удалось", android.widget.Toast.LENGTH_SHORT).show() }
+                            }
+                        }) { Icon(Icons.Filled.Repeat, "Репост", tint = Color.White) }
                     }
                     if (mine) {
                         IconButton(onClick = {
@@ -231,7 +248,7 @@ fun StoryViewer(groups: List<StoryGroup>, start: Int, myUin: Long, onClose: () -
                         if (f != null) {
                             runCatching {
                                 val uri = androidx.core.content.FileProvider.getUriForFile(context, context.packageName + ".files", f)
-                                send.setType("image/*").putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                                send.setType(if (story.isVideo) "video/*" else "image/*").putExtra(android.content.Intent.EXTRA_STREAM, uri)
                                     .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
                             }.onFailure { send.setType("text/plain") }
                         } else send.setType("text/plain")
@@ -487,4 +504,36 @@ private fun StoryCommentsSheet(storyId: Long, myUin: Long, storyOwner: Long, onD
             Spacer(Modifier.height(20.dp))
         }
     }
+}
+
+
+/** A video publication: plays muted-free, fits the screen, pauses with the viewer. */
+@Composable
+fun StoryVideo(file: File, paused: Boolean, onDuration: (Int) -> Unit) {
+    var view by remember { mutableStateOf<android.widget.VideoView?>(null) }
+    androidx.compose.ui.viewinterop.AndroidView(
+        factory = { ctx ->
+            val vv = android.widget.VideoView(ctx).apply {
+                setVideoPath(file.absolutePath)
+                setOnPreparedListener { mp ->
+                    mp.isLooping = false
+                    onDuration(mp.duration.coerceAtLeast(1000))
+                    start()
+                }
+                view = this
+            }
+            android.widget.FrameLayout(ctx).apply {
+                addView(vv, android.widget.FrameLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+                    android.view.Gravity.CENTER,
+                ))
+            }
+        },
+        modifier = Modifier.fillMaxSize(),
+    )
+    LaunchedEffect(paused, view) {
+        val v = view ?: return@LaunchedEffect
+        runCatching { if (paused) v.pause() else if (!v.isPlaying) v.start() }
+    }
+    DisposableEffect(Unit) { onDispose { runCatching { view?.stopPlayback() } } }
 }

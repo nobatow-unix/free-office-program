@@ -77,6 +77,9 @@ import com.icqnew.app.domain.CallStatus
 import com.icqnew.app.domain.ChatPreview
 import com.icqnew.app.domain.ConnectionState
 import com.icqnew.app.domain.User
+import com.icqnew.app.domain.ThemeMode
+import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.LightMode
 import com.icqnew.app.presentation.appContainer
 import com.icqnew.app.presentation.appViewModel
 import com.icqnew.app.presentation.chat.subscribers
@@ -165,7 +168,9 @@ fun HomeScreen(
     onLoggedOut: () -> Unit,
 ) {
     val vm = appViewModel { c ->
-        HomeViewModel(c.chatRepository, c.observeChats, c.authRepository, c.settingsRepository, c.syncPhoneBook)
+        HomeViewModel(c.chatRepository, c.observeChats, c.authRepository, c.settingsRepository, c.syncPhoneBook) { uin ->
+            com.icqnew.app.data.local.Accounts.afterLogout(c.appContext, c.store, uin)
+        }
     }
     val chats by vm.chats.collectAsStateWithLifecycle()
     val contacts by vm.contacts.collectAsStateWithLifecycle()
@@ -231,8 +236,31 @@ fun HomeScreen(
     var storyOpen by remember { mutableStateOf<Pair<List<com.icqnew.app.domain.StoryGroup>, Int>?>(null) }
     var storyUri by remember { mutableStateOf<android.net.Uri?>(null) }
     var storyJpeg by remember { mutableStateOf<ByteArray?>(null) }
-    val storyPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        if (uri != null) storyUri = uri
+    var storyVideo by remember { mutableStateOf<java.io.File?>(null) }
+    val storyMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) {
+            val mime = context.contentResolver.getType(uri) ?: ""
+            if (mime.startsWith("video/")) {
+                scope.launch {
+                    val p = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        com.icqnew.app.data.local.FileUtils.copyToOutbox(context, uri)
+                    }
+                    if (p == null) android.widget.Toast.makeText(context, "Видео слишком большое", android.widget.Toast.LENGTH_SHORT).show()
+                    else storyVideo = p.file
+                }
+            } else storyUri = uri
+        }
+    }
+    val storyPicker = object {
+        fun launch(@Suppress("UNUSED_PARAMETER") type: String) {
+            storyMedia.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+        }
+    }
+    storyVideo?.let { f ->
+        com.icqnew.app.presentation.stories.StoryCaptionDialog(
+            onPost = { text -> storyVideo = null; vm.postStoryFile(f, text, "video/mp4") },
+            onCancel = { storyVideo = null; f.delete() },
+        )
     }
     storyUri?.let { uri ->
         com.icqnew.app.presentation.components.ImageEditorDialog(
@@ -291,14 +319,15 @@ fun HomeScreen(
         topBar = {
             if (tab != 4) {
                 TopAppBar(
+                    expandedHeight = 50.dp,
                     title = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            IcqLogo(32.dp)
-                            Spacer(Modifier.width(10.dp))
+                            IcqLogo(28.dp)
+                            Spacer(Modifier.width(8.dp))
                             Column {
                                 Text(
                                     if (tab == 0) "ICQ" else TABS[tab].title,
-                                    fontSize = 24.sp, fontWeight = FontWeight.Bold,
+                                    fontSize = 22.sp, fontWeight = FontWeight.Bold,
                                 )
                                 if (connection != ConnectionState.CONNECTED) {
                                     Text(
@@ -334,6 +363,17 @@ fun HomeScreen(
                     },
                     actions = {
                         UpdateProgressCircle(container.updater)
+                        // day / night right on the main screen
+                        val sysDark = androidx.compose.foundation.isSystemInDarkTheme()
+                        val darkNow = app.theme == ThemeMode.DARK || (app.theme == ThemeMode.SYSTEM && sysDark)
+                        IconButton(onClick = { vm.setTheme(if (darkNow) ThemeMode.LIGHT else ThemeMode.DARK) }) {
+                            androidx.compose.animation.Crossfade(darkNow, label = "theme") { d ->
+                                Icon(
+                                    if (d) Icons.Filled.LightMode else Icons.Filled.DarkMode,
+                                    if (d) "Дневная тема" else "Ночная тема",
+                                )
+                            }
+                        }
                         IconButton(onClick = onSearch) { Icon(Icons.Filled.Search, contentDescription = "Поиск") }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -404,7 +444,13 @@ fun HomeScreen(
             Column {
             UpdateBanner(container.updater)
             // classic bar, without its own dark background; the open section is lit in colour
-            NavigationBar(containerColor = Color.Transparent, tonalElevation = 0.dp) {
+            // a little lower and slightly see-through: the chat list scrolls under it
+            val navInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+            NavigationBar(
+                containerColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.86f),
+                tonalElevation = 0.dp,
+                modifier = Modifier.height(62.dp + navInset),
+            ) {
                 TABS.forEachIndexed { i, t ->
                     val badge = when (i) {
                         0 -> unreadOf(personal)
@@ -459,8 +505,10 @@ fun HomeScreen(
                     androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(160))
             },
             label = "tabs",
-            modifier = Modifier.padding(padding).fillMaxSize(),
+            // the lists go under the translucent bottom bar (they get the space as content padding)
+            modifier = Modifier.padding(top = padding.calculateTopPadding()).fillMaxSize(),
         ) { shownTab ->
+        CompositionLocalProvider(LocalBottomBar provides padding.calculateBottomPadding()) {
         Box(Modifier.fillMaxSize()) {
             when (shownTab) {
                 0 -> Column(Modifier.fillMaxSize()) {
@@ -625,6 +673,7 @@ fun HomeScreen(
             }
         }
         }
+        }
     }
 }
 
@@ -667,9 +716,12 @@ private fun SubPage(
             windowInsets = WindowInsets.statusBars,
             colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
         )
-        Box(Modifier.weight(1f)) { content() }
+        Box(Modifier.weight(1f).padding(bottom = LocalBottomBar.current)) { content() }
     }
 }
+
+/** Height of the translucent bottom bar: lists add it as bottom content padding. */
+val LocalBottomBar = androidx.compose.runtime.compositionLocalOf { 0.dp }
 
 // ---- Chats / channels ------------------------------------------------------------
 
@@ -697,9 +749,12 @@ private fun ChatsList(
         chats == null -> Unit
         chats.isEmpty() -> Column(Modifier.fillMaxSize()) {
             header?.invoke()
-            Box(Modifier.weight(1f)) { EmptyState(emptyTitle, emptyHint, emptyButton, onEmpty) }
+            Box(Modifier.weight(1f).padding(bottom = LocalBottomBar.current)) { EmptyState(emptyTitle, emptyHint, emptyButton, onEmpty) }
         }
-        else -> LazyColumn(Modifier.fillMaxSize(), state = listState) {
+        else -> LazyColumn(
+            Modifier.fillMaxSize(), state = listState,
+            contentPadding = PaddingValues(bottom = if (archivedView) 0.dp else LocalBottomBar.current),
+        ) {
             if (header != null) item(key = "header") { header() }
             items(chats, key = { it.peer.uin }) { chat ->
                 // in the archive a swipe always takes the chat back out

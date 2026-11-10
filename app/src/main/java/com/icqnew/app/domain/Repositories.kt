@@ -11,6 +11,16 @@ interface AuthRepository {
     /** true = the code was sent to the «ICQ» chat on the user's other device */
     suspend fun requestCode(phone: String): Boolean
     suspend fun verify(phone: String, code: String, name: String?): VerifyResult
+    /** true = the code was also sent to the «ICQ» chat; false = only by e-mail */
+    suspend fun requestEmailCode(email: String): Boolean
+    suspend fun verifyEmail(email: String, code: String, name: String?): VerifyResult
+    /** login = ID, @username or e-mail */
+    suspend fun passwordLogin(login: String, password: String): VerifyResult
+    /** QR sign-in on this phone: (code, text inside the QR) */
+    suspend fun qrStart(): Pair<String, String>
+    /** null while nobody approved the QR yet */
+    suspend fun qrPoll(code: String): VerifyResult?
+    suspend fun setPassword(password: String, old: String?)
     suspend fun updateProfile(name: String, about: String)
     suspend fun setUsername(username: String)
     /** Returns null if free, otherwise the reason. */
@@ -181,7 +191,14 @@ interface ChatRepository {
     // stories
     val stories: StateFlow<List<StoryGroup>>
     suspend fun refreshStories()
-    suspend fun postStory(file: File, text: String)
+    suspend fun postStory(file: File, text: String, mime: String = "image/jpeg")
+    /** Profile → Публикации: kind = image | video | repost */
+    suspend fun publications(uin: Long, kind: String): List<Story>
+    suspend fun repostStory(id: Long)
+    suspend fun myUsernames(): Pair<List<String>, Int>
+    suspend fun addUsername(name: String): Pair<List<String>, Int>
+    suspend fun removeUsername(name: String): Pair<List<String>, Int>
+    suspend fun setPassword(password: String, old: String?)
     suspend fun markStorySeen(id: Long)
     suspend fun storyViewers(id: Long): List<User>
     suspend fun deleteStory(id: Long)
