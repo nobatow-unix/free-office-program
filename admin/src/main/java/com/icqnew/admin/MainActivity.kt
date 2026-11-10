@@ -634,8 +634,8 @@ private fun MoreScreen(me: MeResp?, isSuper: Boolean, can: (String) -> Boolean, 
             }
         }
         if (can("fragment")) MenuItem(Icons.Filled.Diamond, "Fragment — @имена на продажу") { open("fragment") }
-        if (can("servers")) MenuItem(Icons.Filled.Dns, "Серверы") { open("servers") }
         if (isSuper) {
+            MenuItem(Icons.Filled.Dns, "Серверы (VPS): нагрузка, память, диск") { open("servers") }
             MenuItem(Icons.Filled.AdminPanelSettings, "Администраторы и права") { open("admins") }
             MenuItem(Icons.Filled.History, "Журнал действий админов") { open("log") }
         }
@@ -682,32 +682,82 @@ private fun FragmentScreen() {
     }
 }
 
+private fun gb(b: Long) = if (b <= 0) "—" else if (b >= 1L shl 30) "%.1f ГБ".format(b / 1073741824.0) else "%d МБ".format(b / 1048576)
+private fun speed(b: Long) = if (b >= 1 shl 20) "%.1f МБ/с".format(b / 1048576.0) else "%d КБ/с".format(b / 1024)
+private fun uptime(s: Long) = when {
+    s <= 0 -> "—"
+    s >= 86400 -> "${s / 86400} дн ${(s % 86400) / 3600} ч"
+    else -> "${s / 3600} ч ${(s % 3600) / 60} мин"
+}
+
+@Composable
+private fun Meter(label: String, value: String, frac: Float) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+        Row {
+            Text(label, fontSize = 13.sp, modifier = Modifier.weight(1f))
+            Text(value, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        val f = frac.coerceIn(0f, 1f)
+        LinearProgressIndicator(
+            progress = { f }, modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
+            color = when { f > 0.9f -> Red; f > 0.7f -> Orange; else -> Green },
+            trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+        )
+    }
+}
+
+/** Super admin: every VPS of the cluster — alive or not, CPU, RAM, disk, network, uptime. */
 @Composable
 private fun ServersScreen() {
     var info by remember { mutableStateOf<ClusterResp?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
         while (true) {
-            info = runCatching { Core.api.cluster() }.getOrNull() ?: info
+            runCatching { Core.api.cluster() }.onSuccess { info = it; error = null }.onFailure { error = it.message }
             delay(5_000)
         }
     }
     val i = info
-    LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
             Text(
-                if (i == null) "Загрузка…" else (if (i.enabled) "Кластер: ${i.nodes.size} серв." else "Один сервер") + " · база: ${i.db} · онлайн: ${i.online}",
+                if (i == null) (error ?: "Загрузка…")
+                else (if (i.enabled) "Кластер: ${i.nodes.size} серв." else "Один сервер") +
+                    " · база ${i.db} ${gb(i.dbSize)} · онлайн: ${i.online}",
                 fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(4.dp),
             )
         }
-        items(i?.nodes.orEmpty()) { n ->
-            ListCard {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(12.dp).clip(CircleShape).background(if (n.alive) Green else Red))
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(n.id + (if (i?.leader == n.id) " · лидер" else "") + (if (n.me) " · отвечает сейчас" else ""), fontWeight = FontWeight.SemiBold)
-                        Text(n.url + " · онлайн: ${n.online}" + if (!n.alive) " · НЕ РАБОТАЕТ" else "", fontSize = 12.sp,
-                            color = if (n.alive) MaterialTheme.colorScheme.onSurfaceVariant else Red)
+        items(i?.nodes.orEmpty(), key = { it.id }) { n ->
+            val st = n.stats
+            Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+                Column(Modifier.padding(14.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(12.dp).clip(CircleShape).background(if (n.alive) Green else Red))
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(n.id + (if (i?.leader == n.id) " · лидер" else ""), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                            Text(n.url.removePrefix("http://") + (if (st.host.isNotBlank()) " · ${st.host}" else ""),
+                                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Text(if (n.alive) "работает" else "НЕ РАБОТАЕТ", color = if (n.alive) Green else Red, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    if (st.memTotal == 0L) {
+                        Text("Нет данных о сервере", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else {
+                        Meter("Процессор (${st.cores} ядер)", (st.cpu?.let { "%.0f%%".format(it) } ?: "—") +
+                            (st.load.firstOrNull()?.let { " · нагрузка %.2f".format(it) } ?: ""), ((st.cpu ?: 0.0) / 100).toFloat())
+                        Meter("Память", "${gb(st.memUsed)} из ${gb(st.memTotal)}", st.memUsed.toFloat() / st.memTotal)
+                        if (st.swapTotal > 0) Meter("Swap", "${gb(st.swapUsed)} из ${gb(st.swapTotal)}", st.swapUsed.toFloat() / st.swapTotal)
+                        if (st.diskTotal > 0) Meter("Диск", "${gb(st.diskUsed)} из ${gb(st.diskTotal)}", st.diskUsed.toFloat() / st.diskTotal)
+                        Spacer(Modifier.height(4.dp))
+                        Text("Сеть: ↓ ${speed(st.netRx)} · ↑ ${speed(st.netTx)}  (всего ↓ ${gb(st.netRxTotal)} ↑ ${gb(st.netTxTotal)})", fontSize = 13.sp)
+                        Text("Онлайн здесь: ${n.online} · подключений: ${st.connections} · файлы: ${gb(st.filesBytes)}", fontSize = 13.sp)
+                        Text("Работает без перезагрузки: ${uptime(st.uptime)} · программа: ${gb(st.appMem)}",
+                            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (n.alive && st.ts > 0 && System.currentTimeMillis() - st.ts > 60_000) {
+                            Text("данные обновлены ${ago(st.ts)}", fontSize = 12.sp, color = Orange)
+                        }
                     }
                 }
             }

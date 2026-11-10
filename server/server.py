@@ -3729,13 +3729,12 @@ ADMIN_PERMS = {
     "groups": "Группы и каналы",
     "balance": "Баланс",
     "fragment": "Fragment",
-    "servers": "Серверы",
 }
 # which permission an admin API path needs
 _PATH_PERMS = [
     ("/admin/api/pending", "sms"), ("/admin/api/sent", "sms"), ("/admin/api/sms", "sms"),
     ("/admin/api/users", "users"), ("/admin/api/verify", "verify"), ("/admin/api/groups", "groups"),
-    ("/admin/api/balance", "balance"), ("/admin/api/fragment", "fragment"), ("/admin/api/cluster", "servers"),
+    ("/admin/api/balance", "balance"), ("/admin/api/fragment", "fragment"), ("/admin/api/cluster", "super"),
     ("/admin/api/admins", "super"), ("/admin/api/log", "super"),
 ]
 
@@ -4041,20 +4040,57 @@ def sms_auto(body: dict, actor: AdminActor = Depends(require_admin)) -> dict:
     return {"ok": True}
 
 
+def _local_extra_stats() -> dict:
+    """Besides CPU / RAM / disk: connections and the size of the stored files on this server."""
+    def du(path: str) -> int:
+        total = 0
+        try:
+            for e in os.scandir(path):
+                if e.is_file(follow_symlinks=False):
+                    total += e.stat().st_size
+        except OSError:
+            pass
+        return total
+    st = {"connections": sum(len(v) for v in manager.conns.values()), "users_here": len(manager.conns)}
+    now = time.time()
+    if not _du_cache or now - _du_cache[0] > 600:
+        _du_cache[:] = [now, du(UPLOAD_DIR), du(AVATAR_DIR)]
+    st["files_bytes"], st["avatars_bytes"] = _du_cache[1], _du_cache[2]
+    return st
+
+
+_du_cache: list = []
+CLUSTER.extra_stats = _local_extra_stats
+
+
 @app.get("/admin/api/cluster")
-def admin_cluster(_: None = Depends(require_admin)) -> dict:
-    """Servers of the cluster: which are alive, which one is the leader, how many people are online on each."""
+async def admin_cluster(_: None = Depends(require_admin)) -> dict:
+    """Super admin: every server (VPS) — alive or not, leader, online people, CPU, RAM, disk, network."""
     info = CLUSTER.info()
     per: Dict[str, int] = {icqcluster.NODE_ID: len(manager.conns)}
     for u, d in CLUSTER.remote.items():
         for n in d:
             per[n] = per.get(n, 0) + 1
+    stats = await CLUSTER.all_stats()
+    mine = await asyncio.to_thread(icqcluster.system_stats)
+    mine.update(_local_extra_stats())
+    stats[icqcluster.NODE_ID] = mine
     nodes = []
     for n in sorted(set(info["nodes"]) | {icqcluster.NODE_ID}):
         nodes.append({"id": n, "url": info["nodes"].get(n, icqcluster.NODE_URL), "alive": n in CLUSTER.alive,
-                      "me": n == icqcluster.NODE_ID, "online": per.get(n, 0)})
+                      "me": n == icqcluster.NODE_ID, "online": per.get(n, 0), "stats": stats.get(n, {})})
+    db_size = 0
+    try:
+        with conn() as c:
+            if icqdb.IS_PG:
+                db_size = c.execute("SELECT pg_database_size(current_database()) AS n").fetchone()["n"]
+            elif os.path.exists(DB_PATH):
+                db_size = os.path.getsize(DB_PATH)
+    except Exception:  # noqa: BLE001
+        pass
     return {"enabled": info["enabled"], "leader": icqcluster.NODE_ID if CLUSTER.leader else None,
-            "db": "postgresql" if icqdb.IS_PG else "sqlite", "nodes": nodes, "online": manager.online_count()}
+            "db": "postgresql" if icqdb.IS_PG else "sqlite", "db_size": db_size, "nodes": nodes,
+            "online": manager.online_count()}
 
 
 @app.post("/admin/api/balance")
@@ -4342,7 +4378,11 @@ function loadNodes(){fetch('/admin/api/cluster').then(function(r){return r.json(
 document.getElementById('ninfo').textContent=(j.enabled?'Klaster: '+j.nodes.length+' serwer':'Bir serwer (klaster ýok)')+' · baza: '+j.db+' · onlaýn: '+j.online;
 var l=document.getElementById('nlist');l.innerHTML='';j.nodes.forEach(function(n){var d=el('div','row');
 d.appendChild(el('div','phone',(n.alive?'🟢 ':'🔴 ')+n.id+(n.me?' (şu)':'')+(j.leader==n.id?' · lider':'')));
-d.appendChild(el('div','',(n.url||'')+' · onlaýn: '+n.online+(n.alive?'':' · IŞLEMEÝÄR')));l.appendChild(d)})})}
+var st=n.stats||{};function gb(b){return b?(b/1073741824).toFixed(1)+' GB':'—'}function pc(u,t){return t?Math.round(100*u/t)+'%':'—'}
+d.appendChild(el('div','',(n.url||'')+' · onlaýn: '+n.online+(n.alive?'':' · IŞLEMEÝÄR')));
+d.appendChild(el('div','','CPU '+(st.cpu!=null?st.cpu+'%':'—')+' ('+(st.cores||'?')+' ýadro, load '+((st.load||[])[0]||0)+') · RAM '+gb(st.mem_used)+' / '+gb(st.mem_total)+' ('+pc(st.mem_used,st.mem_total)+') · Disk '+gb(st.disk_used)+' / '+gb(st.disk_total)+' ('+pc(st.disk_used,st.disk_total)+')'));
+d.appendChild(el('div','','Tor: ↓'+((st.net_rx||0)/1024).toFixed(0)+' KB/s ↑'+((st.net_tx||0)/1024).toFixed(0)+' KB/s · işläp dur: '+Math.floor((st.uptime||0)/86400)+' gün · faýllar '+gb(st.files_bytes)));
+l.appendChild(d)})})}
 function loadFrag(){fetch('/admin/api/fragment').then(function(r){return r.json()}).then(function(list){var l=document.getElementById('flist');l.innerHTML='';
 list.forEach(function(it){var d=el('div','row');d.appendChild(el('div','phone','@'+it.username+' · '+it.price+' Gold'));d.appendChild(el('div','',it.sold_to?('продано: '+(it.buyer||it.sold_to)+' · '+fmt(it.sold_ts)):'в продаже'));l.appendChild(d)})})}
 function loadBal(){fetch('/admin/api/balance').then(function(r){return r.json()}).then(function(list){var l=document.getElementById('blog');l.innerHTML='';

@@ -116,13 +116,40 @@ data class GroupRow(
 data class LotRow(val username: String, val price: Int, @SerialName("sold_to") val soldTo: Long? = null, val buyer: String? = null)
 
 @Serializable
-data class NodeRow(val id: String, val url: String = "", val alive: Boolean = false, val me: Boolean = false, val online: Int = 0)
+data class NodeStats(
+    val host: String = "",
+    val cpu: Double? = null,
+    val cores: Int = 0,
+    val load: List<Double> = emptyList(),
+    @SerialName("mem_total") val memTotal: Long = 0,
+    @SerialName("mem_used") val memUsed: Long = 0,
+    @SerialName("swap_total") val swapTotal: Long = 0,
+    @SerialName("swap_used") val swapUsed: Long = 0,
+    @SerialName("disk_total") val diskTotal: Long = 0,
+    @SerialName("disk_used") val diskUsed: Long = 0,
+    val uptime: Long = 0,
+    @SerialName("net_rx") val netRx: Long = 0,
+    @SerialName("net_tx") val netTx: Long = 0,
+    @SerialName("net_rx_total") val netRxTotal: Long = 0,
+    @SerialName("net_tx_total") val netTxTotal: Long = 0,
+    @SerialName("app_mem") val appMem: Long = 0,
+    val connections: Int = 0,
+    @SerialName("files_bytes") val filesBytes: Long = 0,
+    val ts: Long = 0,
+)
+
+@Serializable
+data class NodeRow(
+    val id: String, val url: String = "", val alive: Boolean = false, val me: Boolean = false, val online: Int = 0,
+    val stats: NodeStats = NodeStats(),
+)
 
 @Serializable
 data class ClusterResp(
     val enabled: Boolean = false,
     val leader: String? = null,
     val db: String = "",
+    @SerialName("db_size") val dbSize: Long = 0,
     val nodes: List<NodeRow> = emptyList(),
     val online: Int = 0,
 )
@@ -315,5 +342,4 @@ val PERM_NAMES = linkedMapOf(
     "groups" to "Группы и каналы",
     "balance" to "Баланс",
     "fragment" to "Fragment",
-    "servers" to "Серверы",
 )
