@@ -1,0 +1,151 @@
+ANDROID_HOME=/usr/local/lib/android/sdk
+yes: standard output: Broken pipe
+Loading package information...                                                  Loading local repository...                                                     [                                       ] 3% Loading local repository...        [                                       ] 3% Fetch remote repository...         [=                                      ] 3% Fetch remote repository...         [=                                      ] 4% Fetch remote repository...         [=                                      ] 5% Fetch remote repository...         [==                                     ] 5% Fetch remote repository...         [==                                     ] 6% Fetch remote repository...         [==                                     ] 7% Fetch remote repository...         [==                                     ] 7% Computing updates...               [===                                    ] 8% Computing updates...               [===                                    ] 10% Computing updates...              [=======================================] 100% Computing updates...             
+
+
+Welcome to Gradle 8.9!
+
+Here are the highlights of this release:
+ - Enhanced Error and Warning Messages
+ - IDE Integration Improvements
+ - Daemon JVM Information
+
+For more details see https://docs.gradle.org/8.9/release-notes.html
+
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/8.9/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+Daemon will be stopped at the end of the build 
+> Task :admin:buildKotlinToolingMetadata
+> Task :admin:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :admin:preBuild UP-TO-DATE
+> Task :admin:preReleaseBuild UP-TO-DATE
+> Task :admin:generateReleaseResValues
+> Task :admin:checkReleaseAarMetadata
+> Task :admin:mapReleaseSourceSetPaths
+> Task :admin:generateReleaseResources
+> Task :admin:packageReleaseResources
+> Task :admin:mergeReleaseResources
+> Task :admin:createReleaseCompatibleScreenManifests
+> Task :admin:extractDeepLinksRelease
+> Task :admin:parseReleaseLocalResources
+> Task :admin:processReleaseMainManifest
+> Task :admin:processReleaseManifest
+> Task :admin:processReleaseManifestForPackage
+> Task :admin:javaPreCompileRelease
+> Task :admin:extractProguardFiles
+> Task :admin:mergeReleaseJniLibFolders
+> Task :admin:processReleaseResources
+> Task :admin:mergeReleaseNativeLibs
+
+> Task :admin:stripReleaseDebugSymbols
+Unable to strip the following libraries, packaging them as they are: libandroidx.graphics.path.so.
+
+> Task :admin:checkReleaseDuplicateClasses
+> Task :admin:extractReleaseNativeSymbolTables
+> Task :admin:mergeReleaseNativeDebugMetadata NO-SOURCE
+> Task :admin:mergeReleaseStartupProfile
+> Task :admin:mergeReleaseArtProfile
+> Task :admin:mergeReleaseShaders
+> Task :admin:compileReleaseShaders NO-SOURCE
+> Task :admin:generateReleaseAssets UP-TO-DATE
+> Task :admin:mergeReleaseAssets
+> Task :admin:compressReleaseAssets
+> Task :admin:extractReleaseVersionControlInfo
+> Task :admin:processApplicationManifestReleaseForBundle
+> Task :admin:collectReleaseDependencies
+> Task :admin:sdkReleaseDependencyData
+> Task :admin:validateSigningRelease
+> Task :admin:writeReleaseAppMetadata
+> Task :admin:writeReleaseSigningConfigVersions
+> Task :app:buildKotlinToolingMetadata
+> Task :app:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :app:preBuild UP-TO-DATE
+> Task :app:preReleaseBuild UP-TO-DATE
+> Task :admin:bundleReleaseResources
+> Task :app:generateReleaseResValues
+> Task :app:checkReleaseAarMetadata
+> Task :app:processReleaseGoogleServices
+> Task :app:mapReleaseSourceSetPaths
+> Task :app:generateReleaseResources
+> Task :app:packageReleaseResources
+> Task :app:createReleaseCompatibleScreenManifests
+> Task :app:extractDeepLinksRelease
+> Task :app:parseReleaseLocalResources
+> Task :app:processReleaseMainManifest
+> Task :app:processReleaseManifest
+> Task :app:mergeReleaseResources
+> Task :app:javaPreCompileRelease
+> Task :app:extractProguardFiles
+> Task :app:mergeReleaseJniLibFolders
+> Task :app:processReleaseManifestForPackage
+> Task :app:mergeReleaseNativeLibs
+> Task :app:processReleaseResources
+> Task :app:checkReleaseDuplicateClasses
+
+> Task :app:stripReleaseDebugSymbols
+Unable to strip the following libraries, packaging them as they are: libandroidx.graphics.path.so, libdatastore_shared_counter.so, libimage_processing_util_jni.so, libjingle_peerconnection_so.so.
+
+> Task :admin:compileReleaseKotlin
+> Task :app:extractReleaseNativeSymbolTables
+> Task :app:mergeReleaseArtProfile
+> Task :app:mergeReleaseNativeDebugMetadata NO-SOURCE
+> Task :app:mergeReleaseStartupProfile
+> Task :app:mergeReleaseShaders
+> Task :app:compileReleaseShaders NO-SOURCE
+> Task :app:generateReleaseAssets UP-TO-DATE
+> Task :app:mergeReleaseAssets
+> Task :app:extractReleaseVersionControlInfo
+> Task :app:processApplicationManifestReleaseForBundle
+> Task :app:bundleReleaseResources
+> Task :app:compressReleaseAssets
+> Task :app:collectReleaseDependencies
+> Task :app:sdkReleaseDependencyData
+> Task :app:validateSigningRelease
+> Task :app:writeReleaseAppMetadata
+> Task :app:writeReleaseSigningConfigVersions
+> Task :admin:compileReleaseJavaWithJavac NO-SOURCE
+> Task :admin:generateReleaseLintVitalReportModel
+> Task :app:kspReleaseKotlin
+> Task :admin:mergeReleaseGeneratedProguardFiles
+> Task :admin:processReleaseJavaRes
+> Task :admin:expandReleaseArtProfileWildcards
+> Task :admin:mergeReleaseJavaResource
+> Task :admin:lintVitalAnalyzeRelease
+> Task :app:compileReleaseKotlin
+> Task :admin:minifyReleaseWithR8
+> Task :admin:lintVitalReportRelease
+> Task :admin:lintVitalRelease
+
+> Task :app:compileReleaseKotlin
+w: file:///home/runner/work/free-office-program/free-office-program/app/src/main/java/com/icqnew/app/data/call/CallManager.kt:191:17 'var isSpeakerphoneOn: Boolean' is deprecated. Deprecated in Java.
+w: file:///home/runner/work/free-office-program/free-office-program/app/src/main/java/com/icqnew/app/data/call/CallManager.kt:329:12 'var isSpeakerphoneOn: Boolean' is deprecated. Deprecated in Java.
+w: file:///home/runner/work/free-office-program/free-office-program/app/src/main/java/com/icqnew/app/data/call/CallManager.kt:509:12 'var isSpeakerphoneOn: Boolean' is deprecated. Deprecated in Java.
+w: file:///home/runner/work/free-office-program/free-office-program/app/src/main/java/com/icqnew/app/presentation/chat/ChatParts.kt:806:58 Condition is always 'true'.
+w: file:///home/runner/work/free-office-program/free-office-program/app/src/main/java/com/icqnew/app/presentation/chat/ChatParts.kt:1073:50 'val Icons.Filled.Shortcut: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.Shortcut.
+w: file:///home/runner/work/free-office-program/free-office-program/app/src/main/java/com/icqnew/app/presentation/chat/InAppCamera.kt:69:21 'val LocalLifecycleOwner: ProvidableCompositionLocal<LifecycleOwner>' is deprecated. Moved to lifecycle-runtime-compose library in androidx.lifecycle.compose package.
+w: file:///home/runner/work/free-office-program/free-office-program/app/src/main/java/com/icqnew/app/presentation/chat/VideoNoteRecorder.kt:92:21 'val LocalLifecycleOwner: ProvidableCompositionLocal<LifecycleOwner>' is deprecated. Moved to lifecycle-runtime-compose library in androidx.lifecycle.compose package.
+
+> Task :app:compileReleaseJavaWithJavac
+> Task :app:generateReleaseLintVitalReportModel
+> Task :app:mergeReleaseGeneratedProguardFiles
+> Task :app:processReleaseJavaRes
+> Task :app:expandReleaseArtProfileWildcards
+> Task :app:mergeReleaseJavaResource
+> Task :app:lintVitalAnalyzeRelease
+> Task :admin:compileReleaseArtProfile
+> Task :admin:shrinkReleaseRes
+> Task :admin:optimizeReleaseResources
+> Task :admin:packageRelease
+> Task :admin:createReleaseApkListingFileRedirect
+> Task :admin:assembleRelease
+> Task :app:lintVitalReportRelease
+> Task :app:lintVitalRelease
+> Task :app:minifyReleaseWithR8
+> Task :app:compileReleaseArtProfile
+> Task :app:shrinkReleaseRes
+> Task :app:optimizeReleaseResources
+> Task :app:packageRelease
+> Task :app:createReleaseApkListingFileRedirect
+> Task :app:assembleRelease
+
+BUILD SUCCESSFUL in 6m 36s
+101 actionable tasks: 101 executed
