@@ -20,11 +20,16 @@ apt-get install -y python3 python3-venv python3-pip curl coturn iptables redis-t
 
 echo "==> Faýllar $DEST ýerine göçürilýär (baza we faýllar saklanýar)"
 mkdir -p "$DEST"
+if [ "$SRC" != "$DEST" ]; then
 cp "$SRC/server.py" "$SRC/apkdelta.py" "$SRC/db.py" "$SRC/cluster.py" "$SRC/migrate_to_pg.py" \
    "$SRC/requirements.txt" "$SRC/ssl.sh" "$SRC/acme-hook.sh" "$SRC/acme-clean.sh" "$SRC/cluster-fw.sh" "$DEST/"
-chmod +x "$DEST/acme-hook.sh" "$DEST/acme-clean.sh" "$DEST/cluster-fw.sh"
+# klaster skriptleri: admin panel täze serweri şulardan gurýar
+cp "$SRC/install.sh" "$SRC/cluster-main.sh" "$SRC/cluster-add.sh" "$SRC/cluster-join.sh" "$SRC/cluster-remove.sh" "$DEST/" 2>/dev/null || true
+cp "$SRC/CLUSTER.md" "$DEST/" 2>/dev/null || true
 # saýt (icq-new.ru) we web wersiýa (icq-new.online)
 rm -rf "$DEST/web" && cp -r "$SRC/web" "$DEST/web"
+fi
+chmod +x "$DEST"/*.sh 2>/dev/null || true
 # programma: server/apk/icq-new.apk goýsaň, saýtdan "Скачать" bilen ýüklenýär
 mkdir -p "$DEST/apk/history"
 # köne wersiýany saklaýarys: telefonlar täzelenende diňe tapawudy (patch) ýükleýär
@@ -34,9 +39,9 @@ if [ -f "$DEST/apk/icq-new.apk" ] && [ -f "$DEST/apk/version.json" ]; then
     cp "$DEST/apk/icq-new.apk" "$DEST/apk/history/$OLD_CODE.apk"
   fi
 fi
-if [ -f "$SRC/apk/icq-new.apk" ]; then cp "$SRC/apk/icq-new.apk" "$DEST/apk/icq-new.apk"; fi
+if [ "$SRC" != "$DEST" ] && [ -f "$SRC/apk/icq-new.apk" ]; then cp "$SRC/apk/icq-new.apk" "$DEST/apk/icq-new.apk"; fi
 # täze wersiýa barada maglumat (programma aşakda "Обновить" görkezýär)
-if [ -f "$SRC/apk/version.json" ]; then cp "$SRC/apk/version.json" "$DEST/apk/version.json"; fi
+if [ "$SRC" != "$DEST" ] && [ -f "$SRC/apk/version.json" ]; then cp "$SRC/apk/version.json" "$DEST/apk/version.json"; fi
 
 echo "==> Python gurşawy"
 python3 -m venv "$DEST/.venv"
@@ -49,7 +54,7 @@ python3 -m venv "$DEST/.venv"
 [ -f "$DEST/icq.env" ] || touch "$DEST/icq.env"
 
 # Firebase: firebase.json (service account) şu bukja goýulan bolsa ulanylýar
-if [ -f "$SRC/firebase.json" ]; then
+if [ "$SRC" != "$DEST" ] && [ -f "$SRC/firebase.json" ]; then
   cp "$SRC/firebase.json" "$DEST/firebase.json"
 fi
 if [ -f "$DEST/firebase.json" ] && ! grep -q ICQ_FCM_JSON "$DEST/icq.env"; then

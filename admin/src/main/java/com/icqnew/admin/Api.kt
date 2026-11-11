@@ -152,7 +152,20 @@ data class ClusterResp(
     @SerialName("db_size") val dbSize: Long = 0,
     val nodes: List<NodeRow> = emptyList(),
     val online: Int = 0,
+    @SerialName("can_add") val canAdd: Boolean = false,
 )
+
+@Serializable
+data class AddServerBody(val ip: String, val password: String, val user: String = "root", val port: Int = 22)
+
+@Serializable
+data class AddServerResp(val id: Long = 0, val already: Boolean = false)
+
+@Serializable
+data class ServerJob(val id: Long, val ip: String, val status: String, val log: String = "", val created: Long = 0, val updated: Long = 0)
+
+@Serializable
+data class RemoveServerResp(val ok: Boolean = false, val ip: String = "", val dns: String = "")
 
 @Serializable
 data class LogRow(val login: String, val action: String, val ts: Long)
@@ -291,6 +304,12 @@ class Api(private val prefs: Prefs) {
 
     // servers
     suspend fun cluster(): ClusterResp = check(client.get(url("/admin/api/cluster")) { auth() }).body()
+    suspend fun addServer(b: AddServerBody): AddServerResp = check(client.post(url("/admin/api/servers")) {
+        auth(); contentType(ContentType.Application.Json); setBody(b)
+    }).body()
+    suspend fun serverJobs(): List<ServerJob> = check(client.get(url("/admin/api/servers/jobs")) { auth() }).body()
+    suspend fun removeServer(node: String): RemoveServerResp =
+        check(client.delete(url("/admin/api/servers/" + java.net.URLEncoder.encode(node, "UTF-8"))) { auth() }).body()
 
     // admins (super)
     suspend fun admins(): List<AdminDto> = check(client.get(url("/admin/api/admins")) { auth() }).body()

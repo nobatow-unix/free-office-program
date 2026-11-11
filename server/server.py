@@ -483,6 +483,8 @@ def init_db() -> None:
         for col in ("claimed_by INTEGER", "claimed_at INTEGER NOT NULL DEFAULT 0", "sent_by INTEGER",
                     "sent_at INTEGER NOT NULL DEFAULT 0", "sms_error TEXT"):
             _add_column(c, "otp", col)
+        c.execute("CREATE TABLE IF NOT EXISTS server_jobs(id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT NOT NULL,"
+                  " status TEXT NOT NULL, log TEXT NOT NULL DEFAULT '', created INTEGER NOT NULL, updated INTEGER NOT NULL)")
         c.executescript(
             """
             CREATE TABLE IF NOT EXISTS admins(id INTEGER PRIMARY KEY AUTOINCREMENT, login TEXT NOT NULL, pw_hash TEXT NOT NULL,
@@ -3791,7 +3793,7 @@ _PATH_PERMS = [
     ("/admin/api/pending", "sms"), ("/admin/api/sent", "sms"), ("/admin/api/sms", "sms"),
     ("/admin/api/users", "users"), ("/admin/api/verify", "verify"), ("/admin/api/groups", "groups"),
     ("/admin/api/balance", "balance"), ("/admin/api/fragment", "fragment"), ("/admin/api/cluster", "super"),
-    ("/admin/api/admins", "super"), ("/admin/api/log", "super"),
+    ("/admin/api/admins", "super"), ("/admin/api/log", "super"), ("/admin/api/servers", "super"),
 ]
 
 
@@ -4146,7 +4148,217 @@ async def admin_cluster(_: None = Depends(require_admin)) -> dict:
         pass
     return {"enabled": info["enabled"], "leader": icqcluster.NODE_ID if CLUSTER.leader else None,
             "db": "postgresql" if icqdb.IS_PG else "sqlite", "db_size": db_size, "nodes": nodes,
+            "can_add": is_main_server() or (icqcluster.ENABLED and "main" in CLUSTER.alive),
             "online": manager.online_count()}
+
+
+# ---------------------------------------------------------------- add / remove a VPS from the admin panel
+CODE_DIR = os.path.dirname(os.path.abspath(__file__))
+SERVER_DIR = os.environ.get("ICQ_HOME") or CODE_DIR   # where cluster.token / cluster.allow live
+IP_RE = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
+
+
+def is_main_server() -> bool:
+    """The main server keeps PostgreSQL + Redis and the join code (cluster-main.sh made it)."""
+    return os.path.exists(os.path.join(SERVER_DIR, "cluster.token"))
+
+
+def _job_log(jid: int, line: str = "", status: Optional[str] = None) -> None:
+    with conn() as c:
+        if line:
+            c.execute("UPDATE server_jobs SET log=substr(log || ?, -60000), updated=? WHERE id=?",
+                      (line if line.endswith("\n") else line + "\n", now_ms(), jid))
+        if status:
+            c.execute("UPDATE server_jobs SET status=?, updated=? WHERE id=?", (status, now_ms(), jid))
+
+
+def _bundle() -> bytes:
+    """Everything a new server needs (code, site, scripts, the current APK) as one .tar.gz."""
+    import io
+    import tarfile
+    buf = io.BytesIO()
+    names = ["server.py", "apkdelta.py", "db.py", "cluster.py", "migrate_to_pg.py", "requirements.txt", "ssl.sh",
+             "acme-hook.sh", "acme-clean.sh", "cluster-fw.sh", "install.sh", "cluster-join.sh", "cluster-add.sh",
+             "cluster-remove.sh", "cluster-main.sh", "CLUSTER.md", "firebase.json"]
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for n in names:
+            p = os.path.join(CODE_DIR, n)
+            if os.path.exists(p):
+                tar.add(p, arcname="server/" + n)
+        for d in ("web",):
+            p = os.path.join(CODE_DIR, d)
+            if os.path.isdir(p):
+                tar.add(p, arcname="server/" + d)
+        apk_dir = os.path.dirname(APK_PATH)
+        for n in ("icq-new.apk", "version.json"):
+            p = os.path.join(apk_dir, n)
+            if os.path.exists(p):
+                tar.add(p, arcname="server/apk/" + n)
+    return buf.getvalue()
+
+
+def _allow_ip(ip: str, add: bool) -> None:
+    allow = os.path.join(SERVER_DIR, "cluster.allow")
+    try:
+        with open(allow) as f:
+            ips = {x.strip() for x in f if x.strip()}
+    except OSError:
+        ips = set()
+    if add:
+        ips.add(ip)
+    else:
+        ips.discard(ip)
+    with open(allow, "w") as f:
+        f.write("\n".join(sorted(ips)) + "\n")
+    fw = os.path.join(SERVER_DIR, "cluster-fw.sh")
+    if os.path.exists(fw) and os.path.abspath(allow) == "/opt/icq-server/cluster.allow":
+        import subprocess
+        subprocess.run(["bash", fw], capture_output=True, timeout=60)
+
+
+def _install_server(jid: int, ip: str, port: int, user: str, password: str) -> None:
+    """Runs on the main server: SSH to the new VPS, copy ICQ New there, join it to the cluster."""
+    import paramiko
+    try:
+        _job_log(jid, f"==> {ip}: rugsat berilýär (baza we Redis şu serwere açylýar)", "running")
+        _allow_ip(ip, True)
+        with open(os.path.join(SERVER_DIR, "cluster.token")) as f:
+            token = f.read().strip()
+        _job_log(jid, f"==> SSH: {user}@{ip}:{port}")
+        cli = paramiko.SSHClient()
+        cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        cli.connect(ip, port=port, username=user, password=password, timeout=20, banner_timeout=30,
+                    auth_timeout=30, look_for_keys=False, allow_agent=False)
+        _job_log(jid, "   birikdi ✔")
+        data = _bundle()
+        _job_log(jid, f"==> Faýllar göçürilýär ({len(data) // 1024 // 1024} MB)")
+        sftp = cli.open_sftp()
+        with sftp.open("/root/icq-server.tar.gz", "wb") as f:
+            f.set_pipelined(True)
+            f.write(data)
+        sftp.close()
+        sudo = "" if user == "root" else "sudo -S -p '' "
+        cmd = (f"cd /root && rm -rf /root/server && tar xzf icq-server.tar.gz && cd /root/server && "
+               f"{sudo}bash cluster-join.sh {token} 2>&1")
+        _job_log(jid, "==> Gurulýar (3–6 minut): cluster-join.sh")
+        chan = cli.get_transport().open_session()
+        chan.get_pty()
+        chan.exec_command(cmd)
+        if sudo:
+            chan.sendall((password + "\n").encode())
+        buf = b""
+        while True:
+            if chan.recv_ready():
+                buf += chan.recv(65536)
+                *lines, buf = buf.split(b"\n")
+                for ln in lines:
+                    t = ln.decode("utf-8", "replace").rstrip("\r")
+                    if t.strip():
+                        _job_log(jid, t)
+            elif chan.exit_status_ready():
+                break
+            else:
+                time.sleep(0.3)
+        rc = chan.recv_exit_status()
+        if buf.strip():
+            _job_log(jid, buf.decode("utf-8", "replace"))
+        cli.close()
+        if rc == 0:
+            _job_log(jid, f"✔ {ip} goşuldy. Soňky ädim: DNS-e A ýazgy goş — icq-new.online we www → {ip}", "done")
+        else:
+            _job_log(jid, f"❌ cluster-join.sh ýalňyşlyk bilen gutardy (kod {rc})", "failed")
+    except Exception as e:  # noqa: BLE001
+        _job_log(jid, f"❌ {type(e).__name__}: {e}", "failed")
+
+
+class AddServerIn(BaseModel):
+    ip: str
+    password: str
+    user: str = "root"
+    port: int = 22
+
+
+@app.post("/admin/api/servers")
+def admin_add_server(body: AddServerIn, request: Request, actor: AdminActor = Depends(require_admin)) -> dict:
+    """Super admin: a new VPS by IP + SSH password; the main server installs and joins it by itself."""
+    if not is_main_server():
+        main = next((u for n, u in CLUSTER.nodes.items() if n == "main" and n in CLUSTER.alive), None)
+        if main and icqcluster.ENABLED:
+            import urllib.request
+            req = urllib.request.Request(main + "/internal/servers", data=body.model_dump_json().encode(), method="POST",
+                                         headers={"X-ICQ-Cluster": icqcluster.SECRET, "Content-Type": "application/json",
+                                                  "X-ICQ-Admin": actor.login})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return json.loads(r.read())
+        raise HTTPException(400, "Сначала один раз на главном сервере: bash cluster-main.sh (PostgreSQL + Redis)")
+    return _start_add_server(body, actor.login)
+
+
+def _start_add_server(body: AddServerIn, who: str) -> dict:
+    ip = body.ip.strip()
+    if not IP_RE.match(ip):
+        raise HTTPException(400, "Введите IP-адрес, например 203.0.113.7")
+    if not body.password:
+        raise HTTPException(400, "Введите пароль SSH")
+    with conn() as c:
+        busy = c.execute("SELECT id FROM server_jobs WHERE ip=? AND status IN ('queued','running')", (ip,)).fetchone()
+        if busy:
+            return {"id": busy["id"], "already": True}
+        cur = c.execute("INSERT INTO server_jobs(ip, status, log, created, updated) VALUES(?,?,?,?,?)",
+                        (ip, "queued", f"{who}: täze serwer {ip}\n", now_ms(), now_ms()))
+        jid = cur.lastrowid
+        c.execute("INSERT INTO admin_log(admin_id, login, action, ts) VALUES(0,?,?,?)", (who, f"добавляет сервер {ip}", now_ms()))
+    threading.Thread(target=_install_server, args=(jid, ip, max(1, min(body.port, 65535)), body.user.strip() or "root",
+                                                   body.password), daemon=True).start()
+    return {"id": jid}
+
+
+@app.post("/internal/servers")
+def internal_add_server(body: AddServerIn, request: Request) -> dict:
+    _cluster_auth(request)
+    if not is_main_server():
+        raise HTTPException(400, "not main")
+    return _start_add_server(body, request.headers.get("x-icq-admin", "admin"))
+
+
+@app.delete("/internal/servers/allow")
+def internal_disallow(ip: str, request: Request) -> dict:
+    _cluster_auth(request)
+    if is_main_server() and IP_RE.match(ip):
+        _allow_ip(ip, False)
+    return {"ok": True}
+
+
+@app.get("/admin/api/servers/jobs")
+def admin_server_jobs(_: AdminActor = Depends(require_admin)) -> list:
+    with conn() as c:
+        rows = c.execute("SELECT * FROM server_jobs ORDER BY id DESC LIMIT 20").fetchall()
+    return [{"id": r["id"], "ip": r["ip"], "status": r["status"], "log": r["log"][-20000:], "created": r["created"],
+             "updated": r["updated"]} for r in rows]
+
+
+@app.delete("/admin/api/servers/{node}")
+def admin_remove_server(node: str, actor: AdminActor = Depends(require_admin)) -> dict:
+    """Takes a server out of the cluster: no more access to the database, gone from the list."""
+    if node == "main":
+        raise HTTPException(400, "Главный сервер убрать нельзя")
+    url = CLUSTER.nodes.get(node, "")
+    ip = re.sub(r"^https?://", "", url).split(":")[0] if url else ""
+    if ip and is_main_server():
+        _allow_ip(ip, False)
+    elif ip and icqcluster.ENABLED and "main" in CLUSTER.alive:
+        import urllib.request
+        req = urllib.request.Request(CLUSTER.nodes["main"] + "/internal/servers/allow?ip=" + ip, method="DELETE",
+                                     headers={"X-ICQ-Cluster": icqcluster.SECRET})
+        try:
+            urllib.request.urlopen(req, timeout=30).read()
+        except Exception as e:  # noqa: BLE001
+            print("[servers] remove on main failed:", e)
+    if icqcluster.ENABLED and CLUSTER.rs is not None:
+        CLUSTER.rs.hdel("icq:nodes", node)
+        CLUSTER.rs.hdel("icq:stats", node)
+    admin_log(actor, f"убрал сервер {node} {ip}")
+    return {"ok": True, "ip": ip, "dns": f"Удалите A-запись {ip} у домена" if ip else ""}
 
 
 @app.post("/admin/api/balance")
@@ -4408,7 +4620,13 @@ input{width:100%;padding:10px 12px;border:1px solid #d5d9d7;border-radius:10px;f
 <button onclick="fragAdd()">Выставить</button>
 <div id="fres" style="margin:10px 0;font-weight:bold"></div><div id="flist"></div></div>
 <div id="servers" style="display:none">
-<p style="opacity:.8">Serwerler (klaster). Täze serwer goşmak: esasy serwerde <code>bash cluster-add.sh IP</code>, täze serwerde <code>bash cluster-join.sh KOD</code>, soňra DNS-e A ýazgy.</p>
+<div class="row"><div class="phone">➕ Täze serwer goş</div>
+<p class="meta">Täze VPS-iň IP-si we root paroly ýeterlik: esasy serwer oňa özi girip, ICQ New-i gurup, klastere birikdirýär (3–6 minut). Soňra domende şol IP üçin A ýazgy goş.</p>
+<input id="sip" placeholder="IP, mysal: 203.0.113.7" inputmode="decimal">
+<div style="display:flex;gap:8px"><input id="suser" placeholder="Ulanyjy" value="root"><input id="sport" type="number" placeholder="SSH port" value="22" style="width:120px"></div>
+<input id="spass" type="password" placeholder="SSH paroly" autocomplete="new-password">
+<div class="btns"><button class="b" onclick="addSrv()">Goş we gur</button></div><div id="sres" class="meta" style="margin-top:8px"></div></div>
+<div id="jlist"></div>
 <div id="ninfo" style="margin:8px 0;font-weight:bold"></div><div id="nlist"></div></div>
 <div id="users" style="display:none"><input id="q" placeholder="Поиск: имя, телефон, @username или ID" oninput="loadUsers()"><div id="ulist"></div></div>
 <div id="groups" style="display:none"><input id="gq" placeholder="Поиск: название, @username или ID" oninput="loadGroups()"><div id="glist"></div></div>
@@ -4441,7 +4659,19 @@ if(x[0]){e.textContent='✅ '+x[1].name+': баланс '+x[1].balance+' Gold';d
 function fragAdd(){var b={username:document.getElementById('fname').value,price:parseInt(document.getElementById('fprice').value||'0')};
 fetch('/admin/api/fragment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(function(r){return r.json().then(function(j){return [r.ok,j]})}).then(function(x){var e=document.getElementById('fres');
 if(x[0]){e.textContent=x[1].removed?('🗑 @'+x[1].removed+' снято с продажи'):('✅ @'+x[1].username+' — '+x[1].price+' Gold');document.getElementById('fname').value='';loadFrag()}else{e.textContent='❌ '+(x[1].detail||'Ошибка')}})}
-function loadNodes(){fetch('/admin/api/cluster').then(function(r){return r.json()}).then(function(j){
+var jobTimer=null;
+function addSrv(){var b={ip:document.getElementById('sip').value.trim(),user:document.getElementById('suser').value.trim()||'root',port:parseInt(document.getElementById('sport').value||'22'),password:document.getElementById('spass').value};
+var e=document.getElementById('sres');e.textContent='…';
+fetch('/admin/api/servers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(function(r){return r.json().then(function(j){return [r.ok,j]})}).then(function(x){
+if(x[0]){e.textContent=x[1].already?'Bu serwer eýýäm gurulýar':'Başlady ✔ — aşakda ýazgylary görüň';document.getElementById('spass').value='';loadJobs()}else{e.textContent='❌ '+(x[1].detail||'Ýalňyşlyk')}}).catch(function(){e.textContent='❌ Baglanyşyk ýok'})}
+function loadJobs(){fetch('/admin/api/servers/jobs').then(function(r){return r.json()}).then(function(list){var l=document.getElementById('jlist');l.innerHTML='';var busy=false;
+list.slice(0,5).forEach(function(j){var d=el('div','row');var ico={queued:'⏳',running:'⏳',done:'✅',failed:'❌'}[j.status]||'';if(j.status=='queued'||j.status=='running')busy=true;
+d.appendChild(el('div','phone',ico+' '+j.ip+' · '+({queued:'nobatda',running:'gurulýar…',done:'goşuldy',failed:'şowsuz'}[j.status]||j.status)));d.appendChild(el('div','meta',fmt(j.updated)));
+var pre=el('pre','',j.log.split('\\n').slice(-(busy?40:12)).join('\\n'));pre.style.cssText='background:#111;color:#cfe;padding:8px;border-radius:8px;font-size:12px;white-space:pre-wrap;max-height:260px;overflow:auto';d.appendChild(pre);l.appendChild(d)});
+clearTimeout(jobTimer);if(busy&&cur==7)jobTimer=setTimeout(function(){loadJobs();loadNodes()},3000)})}
+function rmSrv(n){if(!confirm('«'+n.id+'» serwerini klasterden aýyrmalymy? Ol bazany ulanyp bilmez. Soňra domenden onuň A ýazgysyny poz.'))return;
+fetch('/admin/api/servers/'+encodeURIComponent(n.id),{method:'DELETE'}).then(function(r){return r.json()}).then(function(j){if(j.dns)alert(j.dns);loadNodes()})}
+function loadNodes(){loadJobs();fetch('/admin/api/cluster').then(function(r){return r.json()}).then(function(j){
 document.getElementById('ninfo').textContent=(j.enabled?'Klaster: '+j.nodes.length+' serwer':'Bir serwer (klaster ýok)')+' · baza: '+j.db+' · onlaýn: '+j.online;
 var l=document.getElementById('nlist');l.innerHTML='';j.nodes.forEach(function(n){var d=el('div','row');
 d.appendChild(el('div','phone',(n.alive?'🟢 ':'🔴 ')+n.id+(n.me?' (şu)':'')+(j.leader==n.id?' · lider':'')));
@@ -4449,7 +4679,9 @@ var st=n.stats||{};function gb(b){return b?(b/1073741824).toFixed(1)+' GB':'—'
 d.appendChild(el('div','',(n.url||'')+' · onlaýn: '+n.online+(n.alive?'':' · IŞLEMEÝÄR')));
 d.appendChild(el('div','','CPU '+(st.cpu!=null?st.cpu+'%':'—')+' ('+(st.cores||'?')+' ýadro, load '+((st.load||[])[0]||0)+') · RAM '+gb(st.mem_used)+' / '+gb(st.mem_total)+' ('+pc(st.mem_used,st.mem_total)+') · Disk '+gb(st.disk_used)+' / '+gb(st.disk_total)+' ('+pc(st.disk_used,st.disk_total)+')'));
 d.appendChild(el('div','','Tor: ↓'+((st.net_rx||0)/1024).toFixed(0)+' KB/s ↑'+((st.net_tx||0)/1024).toFixed(0)+' KB/s · işläp dur: '+Math.floor((st.uptime||0)/86400)+' gün · faýllar '+gb(st.files_bytes)));
-l.appendChild(d)})})}
+if(n.id!='main'&&!n.me){var b=el('div','btns');var x=el('button','b red','Klasterden aýyr');x.onclick=function(){rmSrv(n)};b.appendChild(x);d.appendChild(b)}
+l.appendChild(d)});
+if(!j.can_add)document.getElementById('sres').innerHTML='ℹ️ Ilki esasy serwerde bir gezek: <code>cd /opt/icq-server && bash cluster-main.sh</code> (PostgreSQL + Redis + häzirki maglumatlary göçürýär).'})}
 function loadFrag(){fetch('/admin/api/fragment').then(function(r){return r.json()}).then(function(list){var l=document.getElementById('flist');l.innerHTML='';
 list.forEach(function(it){var d=el('div','row');d.appendChild(el('div','phone','@'+it.username+' · '+it.price+' Gold'));d.appendChild(el('div','',it.sold_to?('продано: '+(it.buyer||it.sold_to)+' · '+fmt(it.sold_ts)):'в продаже'));l.appendChild(d)})})}
 function loadBal(){fetch('/admin/api/balance').then(function(r){return r.json()}).then(function(list){var l=document.getElementById('blog');l.innerHTML='';

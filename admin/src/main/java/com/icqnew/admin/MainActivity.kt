@@ -808,16 +808,25 @@ private fun Meter(label: String, value: String, frac: Float) {
 /** Super admin: every VPS of the cluster — alive or not, CPU, RAM, disk, network, uptime. */
 @Composable
 private fun ServersScreen() {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
     var info by remember { mutableStateOf<ClusterResp?>(null) }
+    var jobs by remember { mutableStateOf<List<ServerJob>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(Unit) {
+    var adding by remember { mutableStateOf(false) }
+    var removing by remember { mutableStateOf<NodeRow?>(null) }
+    var tick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(tick) {
         while (true) {
             runCatching { Core.api.cluster() }.onSuccess { info = it; error = null }.onFailure { error = it.message }
-            delay(5_000)
+            runCatching { Core.api.serverJobs() }.onSuccess { jobs = it.take(5) }
+            // while a server is being installed: refresh fast so the log runs live
+            delay(if (jobs.any { it.status == "queued" || it.status == "running" }) 2_000 else 5_000)
         }
     }
     val i = info
-    LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Box(Modifier.fillMaxSize()) {
+    LazyColumn(contentPadding = PaddingValues(12.dp, 12.dp, 12.dp, 90.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
             Text(
                 if (i == null) (error ?: "Загрузка…")
@@ -826,6 +835,19 @@ private fun ServersScreen() {
                 fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(4.dp),
             )
         }
+        if (i != null && !i.canAdd) item {
+            Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Orange.copy(alpha = 0.14f))) {
+                Column(Modifier.padding(14.dp)) {
+                    Text("Чтобы добавлять серверы", fontWeight = FontWeight.Bold)
+                    Text("Один раз на главном сервере выполните:", fontSize = 13.sp)
+                    Text("cd /opt/icq-server && bash cluster-main.sh", fontFamily = FontFamily.Monospace, fontSize = 13.sp,
+                        modifier = Modifier.padding(vertical = 6.dp))
+                    Text("Он поставит PostgreSQL + Redis и перенесёт все текущие данные. После этого кнопка «+» добавляет VPS в один шаг.",
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+        items(jobs, key = { "job" + it.id }) { j -> JobCard(j) }
         items(i?.nodes.orEmpty(), key = { it.id }) { n ->
             val st = n.stats
             Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
@@ -858,10 +880,139 @@ private fun ServersScreen() {
                             Text("данные обновлены ${ago(st.ts)}", fontSize = 12.sp, color = Orange)
                         }
                     }
+                    if (n.id != "main" && !n.me) {
+                        Spacer(Modifier.height(6.dp))
+                        TextButton(onClick = { removing = n }, contentPadding = PaddingValues(0.dp)) {
+                            Icon(Icons.Filled.Delete, null, tint = Red, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Убрать из кластера", color = Red)
+                        }
+                    }
                 }
             }
         }
     }
+        if (i?.canAdd == true) {
+            ExtendedFloatingActionButton(
+                onClick = { adding = true }, modifier = Modifier.align(Alignment.BottomEnd).padding(18.dp),
+                containerColor = Green, contentColor = Color.White,
+                icon = { Icon(Icons.Filled.Add, null) }, text = { Text("Сервер") },
+            )
+        }
+    }
+    if (adding) AddServerDialog(onDismiss = { adding = false }) { body ->
+        scope.launch {
+            runCatching { Core.api.addServer(body) }
+                .onSuccess {
+                    toast(ctx, if (it.already) "Этот сервер уже устанавливается" else "Установка началась — смотрите журнал")
+                    adding = false; tick++
+                }
+                .onFailure { toast(ctx, it.message ?: "Ошибка") }
+        }
+    }
+    removing?.let { n ->
+        AlertDialog(
+            onDismissRequest = { removing = null },
+            title = { Text("Убрать ${n.id}?") },
+            text = {
+                Text("Сервер ${n.url.removePrefix("http://")} потеряет доступ к базе и исчезнет из списка. " +
+                    "Потом удалите его A-запись у домена, чтобы люди туда не попадали.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    removing = null
+                    scope.launch {
+                        runCatching { Core.api.removeServer(n.id) }
+                            .onSuccess { toast(ctx, it.dns.ifBlank { "Сервер убран" }); tick++ }
+                            .onFailure { toast(ctx, it.message ?: "Ошибка") }
+                    }
+                }) { Text("Убрать", color = Red) }
+            },
+            dismissButton = { TextButton(onClick = { removing = null }) { Text("Отмена") } },
+        )
+    }
+}
+
+@Composable
+private fun JobCard(j: ServerJob) {
+    val busy = j.status == "queued" || j.status == "running"
+    var open by remember(j.id) { mutableStateOf(busy) }
+    val (label, color) = when (j.status) {
+        "done" -> "добавлен ✔" to Green
+        "failed" -> "ошибка" to Red
+        "queued" -> "в очереди…" to Orange
+        else -> "устанавливается…" to Orange
+    }
+    Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        modifier = Modifier.fillMaxWidth().clickable { open = !open }) {
+        Column(Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Orange)
+                else Icon(if (j.status == "done") Icons.Filled.CheckCircle else Icons.Filled.Error, null, tint = color, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Новый сервер ${j.ip}", fontWeight = FontWeight.Bold)
+                    Text("$label · ${ago(j.updated)}", fontSize = 12.sp, color = color)
+                }
+                Icon(if (open) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore, null)
+            }
+            if (open) {
+                Spacer(Modifier.height(8.dp))
+                val lines = j.log.trimEnd().lines().takeLast(if (busy) 40 else 15).joinToString("\n")
+                Text(lines, fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 14.sp, color = Color(0xFFCFEFDF),
+                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Color(0xFF111413)).padding(10.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun AddServerDialog(onDismiss: () -> Unit, onAdd: (AddServerBody) -> Unit) {
+    var ip by rememberSaveable { mutableStateOf("") }
+    var user by rememberSaveable { mutableStateOf("root") }
+    var port by rememberSaveable { mutableStateOf("22") }
+    var pass by remember { mutableStateOf("") }
+    var show by remember { mutableStateOf(false) }
+    val ipOk = Regex("^(\\d{1,3}\\.){3}\\d{1,3}$").matches(ip.trim())
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Добавить сервер") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("Купите VPS (Ubuntu 22/24 или Debian 12) и введите его IP и пароль root. Главный сервер сам зайдёт, " +
+                    "установит ICQ New и подключит к кластеру (3–6 минут).", fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(ip, { ip = it.filter { c -> c.isDigit() || c == '.' } }, label = { Text("IP-адрес") },
+                    placeholder = { Text("203.0.113.7") }, singleLine = true, isError = ip.isNotBlank() && !ipOk,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(6.dp))
+                Row {
+                    OutlinedTextField(user, { user = it.trim() }, label = { Text("Пользователь") }, singleLine = true,
+                        modifier = Modifier.weight(1f))
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedTextField(port, { port = it.filter(Char::isDigit).take(5) }, label = { Text("SSH порт") }, singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.width(110.dp))
+                }
+                Spacer(Modifier.height(6.dp))
+                OutlinedTextField(pass, { pass = it }, label = { Text("Пароль SSH") }, singleLine = true,
+                    visualTransformation = if (show) androidx.compose.ui.text.input.VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { show = !show }) { Icon(if (show) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, null) }
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(6.dp))
+                Text("Пароль не сохраняется. После установки добавьте у домена A-запись с этим IP.", fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = ipOk && pass.isNotEmpty(), onClick = {
+                onAdd(AddServerBody(ip.trim(), pass, user.ifBlank { "root" }, port.toIntOrNull() ?: 22))
+            }) { Text("Установить") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
+    )
 }
 
 // ================================================================== admins (super admin)
