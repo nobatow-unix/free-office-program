@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.RemoveModerator
 import androidx.compose.material.icons.filled.VoiceOverOff
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Groups
@@ -406,6 +407,11 @@ class GroupViewModel(
         repo.leaveGroup(peer)
         onDone()
     }
+
+    fun delete(onDone: () -> Unit) = run("Удалено") {
+        repo.deleteGroup(peer)
+        onDone()
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -427,6 +433,9 @@ fun GroupInfoScreen(
     var editing by remember { mutableStateOf(false) }
     var adding by remember { mutableStateOf(false) }
     var confirmLeave by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    // "all" = subscribers / members, "admins" = administrators (opened from the counters)
+    var listMode by remember { mutableStateOf<String?>(null) }
     var memberMenu by remember { mutableStateOf<User?>(null) }
     var editPhoto by remember { mutableStateOf<android.net.Uri?>(null) }
 
@@ -563,9 +572,9 @@ fun GroupInfoScreen(
                 val members = g?.members.orEmpty()
                 val admins = members.count { it.role == "owner" || it.role == "admin" }
                 InfoCard {
-                    CountRow(Icons.Filled.Groups, if (isChannel) "Подписчики" else "Участники", g?.count ?: members.size)
+                    CountRow(Icons.Filled.Groups, if (isChannel) "Подписчики" else "Участники", g?.count ?: members.size) { listMode = "all" }
                     CardDivider(start = 56.dp)
-                    CountRow(Icons.Filled.AdminPanelSettings, "Администраторы", admins)
+                    CountRow(Icons.Filled.AdminPanelSettings, "Администраторы", admins) { listMode = "admins" }
                     if (admin) {
                         CardDivider(start = 56.dp)
                         CountRow(Icons.Filled.Settings, if (isChannel) "Настройки канала" else "Настройки группы", null, onOpenSettings)
@@ -645,9 +654,76 @@ fun GroupInfoScreen(
                         Text(if (isChannel) "Отписаться от канала" else "Покинуть группу", color = MaterialTheme.colorScheme.error)
                     },
                 )
+                if (owner) ListItem(
+                    modifier = Modifier.clickable { confirmDelete = true },
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    leadingContent = { Icon(Icons.Filled.DeleteForever, null, tint = MaterialTheme.colorScheme.error) },
+                    headlineContent = {
+                        Text(if (isChannel) "Удалить канал" else "Удалить группу", color = MaterialTheme.colorScheme.error)
+                    },
+                    supportingContent = { Text("Для всех подписчиков, вместе со всеми публикациями") },
+                )
                 Spacer(Modifier.height(24.dp))
             }
         }
+    }
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text(if (isChannel) "Удалить канал?" else "Удалить группу?") },
+            text = { Text("«${g?.name ?: ""}» исчезнет у всех вместе со всеми сообщениями. Это нельзя отменить.") },
+            confirmButton = {
+                TextButton(onClick = { confirmDelete = false; vm.delete(onLeft) }) {
+                    Text("Удалить", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Отмена") } },
+        )
+    }
+
+    listMode?.let { mode ->
+        val all = g?.members.orEmpty().filter { it.role != "bot" }
+        val shown = if (mode == "admins") all.filter { it.role == "owner" || it.role == "admin" } else all
+        val hidden = mode == "all" && isChannel && !admin && g?.settings?.showSubscribers != true
+        AlertDialog(
+            onDismissRequest = { listMode = null },
+            title = { Text(if (mode == "admins") "Администраторы" else if (isChannel) "Подписчики" else "Участники") },
+            text = {
+                if (hidden) {
+                    Text("Создатель канала скрыл список подписчиков.")
+                } else if (shown.isEmpty()) {
+                    Text("Список пуст")
+                } else {
+                    LazyColumn(Modifier.heightIn(max = 460.dp)) {
+                        items(shown, key = { it.uin }) { u ->
+                            Row(
+                                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                                    .clickable { listMode = null; if (u.uin != me) onOpenProfile(u.uin) }
+                                    .padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Avatar(u.name, u.uin, u.avatarUrl, u.online, 40.dp)
+                                Spacer(Modifier.width(12.dp))
+                                Column(Modifier.weight(1f)) {
+                                    com.icqnew.app.presentation.components.NameLine(
+                                        if (u.uin == me) "${u.name} (вы)" else u.name, verified = u.verified, fontWeight = FontWeight.Medium,
+                                    )
+                                    Text(formatPresence(u.online, u.lastSeen, u.uin), fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                when (u.role) {
+                                    "owner" -> RoleBadge("создатель")
+                                    "admin" -> RoleBadge("админ")
+                                    else -> Unit
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { listMode = null }) { Text("Закрыть") } },
+        )
     }
 
     if (editing && g != null) {
@@ -958,6 +1034,9 @@ fun GroupSettingsScreen(peer: Long, onBack: () -> Unit) {
                 if (ch) {
                     Switch2("Подписывать публикации", "Под постом видно имя администратора", st.signatures) {
                         save(st.copy(signatures = it))
+                    }
+                    Switch2("Список подписчиков виден всем", "Если выключить — подписчики не видят, кто ещё подписан", st.showSubscribers) {
+                        save(st.copy(showSubscribers = it))
                     }
                 } else {
                     Switch2("Отправлять фото и файлы", "Если выключить — только текст", st.membersMedia) {

@@ -215,6 +215,8 @@ interface ChatRepository {
     suspend fun addMembers(peer: Long, uins: List<Long>)
     suspend fun removeMember(peer: Long, uin: Long)
     suspend fun leaveGroup(peer: Long)
+    /** the creator deletes his group / channel for everybody */
+    suspend fun deleteGroup(peer: Long)
 }
 
 // ---- Use cases -------------------------------------------------------------

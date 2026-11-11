@@ -357,7 +357,7 @@ fun SenderName(name: String?, uin: Long, verified: Boolean, onClick: () -> Unit)
         )
         if (verified || uin == com.icqnew.app.domain.BOT_UIN) {
             Spacer(Modifier.width(3.dp))
-            VerifiedBadge(14.dp, bot = uin == com.icqnew.app.domain.BOT_UIN)
+            VerifiedBadge(14.dp)
         }
     }
 }

@@ -20,8 +20,8 @@ android {
         applicationId = "icq.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 17
-        versionName = "4.1.3"
+        versionCode = 18
+        versionName = "4.1.4"
         // phones only: ARM (no x86 emulator libraries) — the APK gets much smaller
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }

@@ -253,7 +253,7 @@ private fun MainScreen(onLoggedOut: () -> Unit) {
             when (sub ?: tab) {
                 "codes" -> CodesScreen(me)
                 "users" -> UsersScreen(canUsers = can("users"), canVerify = can("verify"), canBalance = can("balance"))
-                "groups" -> GroupsScreen(canVerify = can("verify"))
+                "groups" -> GroupsScreen(canVerify = can("verify"), canDelete = can("groups"))
                 "balance" -> BalanceScreen()
                 "fragment" -> FragmentScreen()
                 "servers" -> ServersScreen()
@@ -530,15 +530,33 @@ private fun VerifyById(kind: String) {
 
 // ================================================================== groups
 @Composable
-private fun GroupsScreen(canVerify: Boolean) {
+private fun GroupsScreen(canVerify: Boolean, canDelete: Boolean) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var q by remember { mutableStateOf("") }
     var list by remember { mutableStateOf<List<GroupRow>?>(null) }
     var reload by remember { mutableIntStateOf(0) }
+    var toDelete by remember { mutableStateOf<GroupRow?>(null) }
     LaunchedEffect(q, reload) {
         delay(350)
         list = runCatching { Core.api.groups(q) }.getOrElse { emptyList() }
+    }
+    toDelete?.let { g ->
+        AlertDialog(
+            onDismissRequest = { toDelete = null },
+            title = { Text("Удалить «${g.name}»?") },
+            text = { Text((if (g.kind == "channel") "Канал" else "Группа") + " исчезнет у всех ${g.count} участников вместе со всеми сообщениями.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    toDelete = null
+                    scope.launch {
+                        runCatching { Core.api.deleteGroup(g.id) }.onSuccess { toast(ctx, "Удалено"); reload++ }
+                            .onFailure { toast(ctx, it.message ?: "Ошибка") }
+                    }
+                }) { Text("Удалить", color = Red) }
+            },
+            dismissButton = { TextButton(onClick = { toDelete = null }) { Text("Отмена") } },
+        )
     }
     Column(Modifier.fillMaxSize()) {
         SearchField(q, { q = it }, "Название, @имя или ID")
@@ -563,6 +581,7 @@ private fun GroupsScreen(canVerify: Boolean) {
                                     .onSuccess { reload++ }.onFailure { toast(ctx, it.message ?: "Ошибка") }
                             }
                         }) { Text(if (g.verified) "Снять ✓" else "Дать ✓") }
+                        if (canDelete) IconButton(onClick = { toDelete = g }) { Icon(Icons.Filled.DeleteForever, "Удалить", tint = Red) }
                     }
                 }
             }

@@ -119,6 +119,7 @@ data class GroupSettingsDto(
     val welcome: Boolean = true,
     @SerialName("help_on_open") val helpOnOpen: Boolean = true,
     val signatures: Boolean = false,
+    @SerialName("show_subscribers") val showSubscribers: Boolean = false,
 )
 
 @Serializable

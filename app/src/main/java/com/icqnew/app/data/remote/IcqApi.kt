@@ -261,6 +261,12 @@ class IcqApi(private val client: HttpClient, private val store: SessionStore) {
     suspend fun addMembers(gid: Long, uins: List<Long>): GroupDto =
         post("/api/groups/$gid/members", GroupAddRequest(uins))
 
+    suspend fun deleteGroup(gid: Long) {
+        val s = store.snapshot()
+        val resp = client.delete(s.serverUrl + "/api/groups/$gid") { s.token?.let { bearerAuth(it) } }
+        if (!resp.status.isSuccess()) throw ApiException(errorText(resp), resp.status.value)
+    }
+
     suspend fun removeMember(gid: Long, uin: Long) {
         val s = store.snapshot()
         val resp = client.delete(s.serverUrl + "/api/groups/$gid/members/$uin") { s.token?.let { bearerAuth(it) } }

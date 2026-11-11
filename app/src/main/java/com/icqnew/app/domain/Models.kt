@@ -187,6 +187,8 @@ data class GroupSettings(
     val welcome: Boolean = true,
     val helpOnOpen: Boolean = true,
     val signatures: Boolean = false,
+    /** channel: subscribers see the list of subscribers */
+    val showSubscribers: Boolean = false,
 )
 
 const val BOT_UIN = 10_000_000L

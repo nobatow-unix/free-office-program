@@ -91,6 +91,7 @@ GROUP_DEFAULTS = {
     "welcome": True,            # the bot greets new members
     "help_on_open": True,       # the bot shows the help card when the chat is opened
     "signatures": False,        # channel: show the author of a post
+    "show_subscribers": False,  # channel: subscribers may see who else is subscribed
 }
 USERNAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{3,31}$")
 ATT_KINDS = ("image", "file", "voice", "video_note")
@@ -1808,7 +1809,7 @@ def resolve_username(username: str, authorization: Optional[str] = Header(None))
             return {"type": "user", "user": user_json(u, c=c)}
         g = c.execute("SELECT * FROM groups WHERE lower(username)=lower(?)", (un,)).fetchone()
         if g:
-            d = group_json(c, g, with_members=False)
+            d = group_json(c, g, with_members=False, public_view=channel_public(g))
             d["member"] = is_member(c, g["id"], uin)
             return {"type": "group", "group": d}
     raise HTTPException(404, "Не найдено")
@@ -2279,7 +2280,9 @@ def insert_bot(c: sqlite3.Connection, gid: int, text: str) -> sqlite3.Row:
     return c.execute("SELECT * FROM messages WHERE id=?", (cur.lastrowid,)).fetchone()
 
 
-def group_json(c: sqlite3.Connection, g: sqlite3.Row, with_members: bool = True, admins_only: bool = False) -> dict:
+def group_json(c: sqlite3.Connection, g: sqlite3.Row, with_members: bool = True, admins_only: bool = False,
+               public_view: bool = False) -> dict:
+    """public_view: a channel seen by a subscriber — the creator is not shown (Telegram-like)."""
     d = {
         "id": g["id"],
         "name": g["name"],
@@ -2308,6 +2311,8 @@ def group_json(c: sqlite3.Connection, g: sqlite3.Row, with_members: bool = True,
         ).fetchall()
         out = []
         for r in rows:
+            if public_view and r["role"] == "owner":
+                continue
             u = user_json(r)
             u["role"] = r["role"]
             mu = r["muted_until"] or 0
@@ -2321,13 +2326,20 @@ def group_json(c: sqlite3.Connection, g: sqlite3.Row, with_members: bool = True,
                 "verified": True, "bot": True, "role": "bot", "muted_until": 0,
             })
         d["members"] = out
+    if public_view:
+        d["owner"] = 0
     return d
 
 
+def channel_public(g: sqlite3.Row) -> bool:
+    return (g["kind"] or "group") == "channel"
+
+
 def group_view(c: sqlite3.Connection, g: sqlite3.Row, viewer: int) -> dict:
-    """Channel subscribers do not see the subscriber list (only the admins)."""
-    hide = (g["kind"] == "channel") and not is_admin(c, g["id"], viewer)
-    return group_json(c, g, admins_only=hide)
+    """Channel subscribers: the creator is hidden; the subscriber list only if the creator allowed it."""
+    if channel_public(g) and not is_admin(c, g["id"], viewer):
+        return group_json(c, g, admins_only=not group_settings(g)["show_subscribers"], public_view=True)
+    return group_json(c, g)
 
 
 async def push_group(gid: int, extra_targets: Optional[List[int]] = None, sys_rows=()) -> None:
@@ -2338,7 +2350,8 @@ async def push_group(gid: int, extra_targets: Optional[List[int]] = None, sys_ro
         members = group_members(c, gid)
         full = {"type": "group", "group": group_json(c, g)}
         if g["kind"] == "channel":
-            short = {"type": "group", "group": group_json(c, g, admins_only=True)}
+            short = {"type": "group", "group": group_json(
+                c, g, admins_only=not group_settings(g)["show_subscribers"], public_view=True)}
             admins = {m for m in members if is_admin(c, gid, m)}
         else:
             short, admins = full, set(members)
@@ -2383,7 +2396,7 @@ def get_group(gid: int, authorization: Optional[str] = Header(None)) -> dict:
     with conn() as c:
         g = c.execute("SELECT * FROM groups WHERE id=?", (gid,)).fetchone()
         if g and not is_member(c, gid, uin) and g["public"]:
-            d = group_json(c, g, with_members=False)  # preview of a public chat
+            d = group_json(c, g, with_members=False, public_view=channel_public(g))  # preview of a public chat
             d["member"] = False
             return d
         d = group_view(c, require_group(c, gid, uin), uin)
@@ -2401,18 +2414,19 @@ def search_chats(q: str = Query(""), authorization: Optional[str] = Header(None)
             rows = c.execute(
                 "SELECT g.*, (SELECT COUNT(*) FROM group_members m WHERE m.gid=g.id) AS n FROM groups g"
                 " WHERE (g.public=1 OR g.username IS NOT NULL) AND (g.name LIKE ? OR g.about LIKE ? OR g.username LIKE ?)"
-                " ORDER BY g.verified DESC, n DESC LIMIT 50",
-                (like, like, like),
+                " ORDER BY g.verified DESC, (g.premium_until>?) DESC, n DESC LIMIT 50",
+                (like, like, like, now_ms()),
             ).fetchall()
-        else:  # verified channels first, then popular public chats
+        else:  # the showcase: only verified (green tick) and Premium channels / chats
             rows = c.execute(
                 "SELECT g.*, (SELECT COUNT(*) FROM group_members m WHERE m.gid=g.id) AS n FROM groups g"
-                " WHERE g.public=1 OR g.verified=1 OR g.username IS NOT NULL"
-                " ORDER BY g.verified DESC, CASE g.kind WHEN 'channel' THEN 0 ELSE 1 END, n DESC LIMIT 40"
+                " WHERE g.verified=1 OR g.premium_until>?"
+                " ORDER BY g.verified DESC, CASE g.kind WHEN 'channel' THEN 0 ELSE 1 END, n DESC LIMIT 60",
+                (now_ms(),),
             ).fetchall()
         out = []
         for g in rows:
-            d = group_json(c, g, with_members=False)
+            d = group_json(c, g, with_members=False, public_view=channel_public(g))
             d["member"] = is_member(c, g["id"], uin)
             out.append(d)
         return out
@@ -2902,6 +2916,48 @@ async def group_settings_endpoint(gid: int, body: GroupSettingsIn, authorization
         result = group_json(c, c.execute("SELECT * FROM groups WHERE id=?", (gid,)).fetchone())
     await push_group(gid)
     return result
+
+
+async def delete_group_everywhere(gid: int) -> Optional[str]:
+    """Removes a group / channel with everything in it; every member's app drops it."""
+    with conn() as c:
+        g = c.execute("SELECT name, kind FROM groups WHERE id=?", (gid,)).fetchone()
+        if not g:
+            return None
+        members = group_members(c, gid)
+        ids = [r["id"] for r in c.execute("SELECT id FROM messages WHERE group_id=?", (gid,)).fetchall()]
+        for i in range(0, len(ids), 500):
+            part = ids[i:i + 500]
+            q = ",".join("?" * len(part))
+            for t in ("reactions", "post_views", "poll_votes", "polls"):
+                c.execute(f"DELETE FROM {t} WHERE msg_id IN ({q})", part)
+        c.execute("DELETE FROM messages WHERE group_id=?", (gid,))
+        for t, col in (("group_members", "gid"), ("group_bans", "gid"), ("group_log", "gid")):
+            c.execute(f"DELETE FROM {t} WHERE {col}=?", (gid,))
+        c.execute("UPDATE users SET channel_id=NULL WHERE channel_id=?", (gid,))
+        c.execute("DELETE FROM groups WHERE id=?", (gid,))
+    for name in (f"g{gid}.jpg", f"b{gid}.jpg"):
+        try:
+            os.remove(os.path.join(AVATAR_DIR, name))
+        except OSError:
+            pass
+        CLUSTER.delete_file("avatars", name)
+    await manager.send_many(members, {"type": "group_gone", "id": gid})
+    return g["name"]
+
+
+@app.delete("/api/groups/{gid}")
+async def delete_group(gid: int, authorization: Optional[str] = Header(None)) -> dict:
+    """Only the creator deletes his group / channel (for everybody)."""
+    uin = require_uin(authorization)
+    with conn() as c:
+        g = c.execute("SELECT owner FROM groups WHERE id=?", (gid,)).fetchone()
+        if not g:
+            raise HTTPException(404, "Не найдено")
+        if g["owner"] != uin:
+            raise HTTPException(403, "Удалить может только создатель")
+    await delete_group_everywhere(gid)
+    return {"ok": True}
 
 
 @app.post("/api/groups/{gid}/bot_avatar")
@@ -4293,6 +4349,15 @@ def admin_groups(q: str = "", _: None = Depends(require_admin)) -> list:
         ]
 
 
+@app.delete("/admin/api/groups/{gid}")
+async def admin_delete_group(gid: int, actor: AdminActor = Depends(require_admin)) -> dict:
+    name = await delete_group_everywhere(gid)
+    if name is None:
+        raise HTTPException(404, "Группа/канал не найдены")
+    admin_log(actor, f"удалил группу/канал {name} ({gid})")
+    return {"ok": True}
+
+
 @app.delete("/admin/api/users/{uin}")
 async def admin_delete(uin: int, actor: AdminActor = Depends(require_admin)) -> dict:
     admin_log(actor, f"удалил аккаунт {uin}")
@@ -4366,7 +4431,9 @@ document.getElementById('vres').textContent=x[0]?((on?'✔ Галочка пос
 function grow(g){var d=el('div','row');var p=el('div','phone');p.innerHTML='';p.appendChild(document.createTextNode((g.kind=='channel'?'📢 ':'👥 ')+g.name));if(g.verified)p.insertAdjacentHTML('beforeend',CHECK);d.appendChild(p);
 d.appendChild(el('div','meta','ID '+g.id+(g.username?' · @'+g.username:'')+' · '+(g.kind=='channel'?'подписчиков: ':'участников: ')+g.count+(g.public?' · публичный':'')+' · создатель ID '+g.owner));
 var b=el('div','btns');var v=el('button','b '+(g.verified?'sec':''),g.verified?'Снять галочку':'Поставить галочку ✔');
-v.onclick=function(){fetch('/admin/api/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'group',id:g.id,on:!g.verified})}).then(loadGroups)};b.appendChild(v);d.appendChild(b);return d}
+v.onclick=function(){fetch('/admin/api/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'group',id:g.id,on:!g.verified})}).then(loadGroups)};b.appendChild(v);
+var x=el('button','b sec','Удалить 🗑');x.onclick=function(){if(confirm('Удалить «'+g.name+'» у всех?'))fetch('/admin/api/groups/'+g.id,{method:'DELETE'}).then(loadGroups)};b.appendChild(x);
+d.appendChild(b);return d}
 function loadGroups(){var q=document.getElementById('gq').value;fetch('/admin/api/groups?q='+encodeURIComponent(q)).then(function(r){return r.json()}).then(function(list){var l=document.getElementById('glist');l.innerHTML='';if(!list.length){l.appendChild(el('div','empty','Ничего нет'));return}list.forEach(function(g){l.appendChild(grow(g))})})}
 function topUp(){var b={who:document.getElementById('bwho').value,amount:parseInt(document.getElementById('bamt').value||'0'),reason:document.getElementById('breason').value};
 fetch('/admin/api/balance',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(function(r){return r.json().then(function(j){return [r.ok,j]})}).then(function(x){var e=document.getElementById('bres');

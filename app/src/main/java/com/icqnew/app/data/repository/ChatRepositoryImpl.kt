@@ -779,7 +779,7 @@ class ChatRepositoryImpl(
     override suspend fun saveGroupSettings(peer: Long, settings: GroupSettings, botName: String?) {
         val dto = GroupSettingsDto(
             settings.onlyAdminsAdd, settings.slowMode, settings.membersMedia, settings.reactions,
-            settings.welcome, settings.helpOnOpen, settings.signatures,
+            settings.welcome, settings.helpOnOpen, settings.signatures, settings.showSubscribers,
         )
         saveGroup(api.groupSettings(groupIdOf(peer), dto, botName))
     }
@@ -791,7 +791,8 @@ class ChatRepositoryImpl(
     private fun parseSettings(raw: String): GroupSettings {
         val d = runCatching { settingsJson.decodeFromString(GroupSettingsDto.serializer(), raw) }
             .getOrDefault(GroupSettingsDto())
-        return GroupSettings(d.onlyAdminsAdd, d.slowMode, d.membersMedia, d.reactions, d.welcome, d.helpOnOpen, d.signatures)
+        return GroupSettings(d.onlyAdminsAdd, d.slowMode, d.membersMedia, d.reactions, d.welcome, d.helpOnOpen, d.signatures,
+            d.showSubscribers)
     }
 
     override suspend fun moderate(peer: Long, uin: Long, action: String, seconds: Long) {
@@ -917,6 +918,11 @@ class ChatRepositoryImpl(
     override suspend fun removeMember(peer: Long, uin: Long) {
         api.removeMember(groupIdOf(peer), uin)
         runCatching { refreshGroup(peer) }
+    }
+
+    override suspend fun deleteGroup(peer: Long) {
+        api.deleteGroup(groupIdOf(peer))
+        dropGroup(groupIdOf(peer))
     }
 
     override suspend fun leaveGroup(peer: Long) {

@@ -262,6 +262,7 @@ class Api(private val prefs: Prefs) {
     suspend fun users(q: String): List<UserRow> = check(client.get(url("/admin/api/users")) { auth(); parameter("q", q) }).body()
     suspend fun ban(uin: Long, on: Boolean) { check(client.post(url("/admin/api/users/$uin/ban")) { auth(); parameter("ban", on) }) }
     suspend fun deleteUser(uin: Long) { check(client.delete(url("/admin/api/users/$uin")) { auth() }) }
+    suspend fun deleteGroup(id: Long) { check(client.delete(url("/admin/api/groups/$id")) { auth() }) }
     suspend fun groups(q: String): List<GroupRow> = check(client.get(url("/admin/api/groups")) { auth(); parameter("q", q) }).body()
     suspend fun verify(kind: String, id: Long, on: Boolean) {
         check(client.post(url("/admin/api/verify")) {

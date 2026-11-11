@@ -288,12 +288,12 @@ fun NameLine(
             name, fontSize = fontSize, fontWeight = fontWeight, color = color, maxLines = 1,
             overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false),
         )
-        // green tick = official / verified by the admin; blue tick = ICQ Premium (and bots)
+        // green tick = official / verified by the admin, and bots; blue tick = ICQ Premium
         if (verified || bot || premium) {
             Spacer(Modifier.width(4.dp))
             VerifiedBadge(
                 if (fontSize.isSp && fontSize.value > 20) 20.dp else 16.dp,
-                bot = bot || (premium && !verified),
+                bot = premium && !verified && !bot,
             )
         }
     }
