@@ -20,7 +20,7 @@ android {
     }
     signingConfigs {
         create("icq") {
-            storeFile = file("../app/icq-new.keystore")
+            storeFile = file("icq-admin.keystore")
             storePassword = "icqnew-2026-key"
             keyAlias = "icqnew"
             keyPassword = "icqnew-2026-key"
@@ -51,6 +51,8 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.activity:activity-compose:1.9.2")
+    implementation("androidx.biometric:biometric:1.1.0")      // fingerprint / face unlock
+    implementation("androidx.fragment:fragment-ktx:1.8.3")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.5")
     implementation("io.ktor:ktor-client-core:2.3.12")

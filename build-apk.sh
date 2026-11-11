@@ -62,7 +62,7 @@ fi
 echo "==> 4/4 APK ýasalýar (birinji gezek 10-15 min)"
 echo "sdk.dir=$SDK" > local.properties
 export ANDROID_HOME="$SDK"
-"$GRADLE_HOME_DIR/bin/gradle" :app:assembleRelease :admin:assembleRelease --no-daemon
+"$GRADLE_HOME_DIR/bin/gradle" :app:assembleRelease --no-daemon
 
 APK="app/build/outputs/apk/release/app-release.apk"
 OUT_DIR="$HOME/Загрузки"
@@ -71,11 +71,8 @@ cp "$APK" "$OUT_DIR/icq-new.apk"
 # serwer üçin: server/apk/icq-new.apk — VPS-e ýüklänsoň telefonlar diňe tapawudy (patch) ýükleýär
 mkdir -p server/apk
 cp "$APK" server/apk/icq-new.apk
-# admin programmasy (super admin / adminler, awto-SMS)
-cp "admin/build/outputs/apk/release/admin-release.apk" "$OUT_DIR/icq-admin.apk"
 echo
 echo "TAÝÝAR: $OUT_DIR/icq-new.apk"
-echo "Admin programma: $OUT_DIR/icq-admin.apk  (SIM-li telefona gur: kodlary SMS bilen özi ugradýar)"
 echo "Serwer üçin hem goýuldy: server/apk/icq-new.apk"
 echo "Täzelenme: server bukjasyny VPS-e göçür we 'sudo bash install.sh' işlet —"
 echo "  serwer köne wersiýany saklaýar we telefonlara diňe täze bölegi (patch) iberýär."

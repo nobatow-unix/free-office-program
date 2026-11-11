@@ -111,7 +111,6 @@ dependencies {
     implementation("com.google.firebase:firebase-messaging")
 }
 
-// GitHub check build: compile the admin app (module :admin) together with ICQ New
 if (System.getenv("CI") == "true") {
     tasks.matching { it.name == "assembleRelease" }.configureEach { dependsOn(":admin:assembleRelease") }
 }

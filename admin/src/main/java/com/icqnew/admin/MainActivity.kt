@@ -9,7 +9,7 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Toast
-import androidx.activity.ComponentActivity
+import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -70,7 +70,7 @@ private val scheme = darkColorScheme(
     outline = Color(0xFF4A4A4A), outlineVariant = Color(0xFF333333), error = Red,
 )
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Core.init(this)
@@ -98,8 +98,39 @@ private fun ago(ms: Long): String {
 
 @Composable
 private fun Root() {
+    val ctx = LocalContext.current
     var token by remember { mutableStateOf(Core.prefs.token) }
-    if (token == null) LoginScreen { token = Core.prefs.token } else MainScreen { token = null }
+    // every start: the fingerprint opens the app (if it was turned on)
+    var unlocked by rememberSaveable { mutableStateOf(!(Secure.has(ctx) && Secure.canUse(ctx))) }
+    when {
+        token == null -> LoginScreen { token = Core.prefs.token; unlocked = true }
+        !unlocked -> LockScreen(onUnlocked = { unlocked = true }, onPassword = { Core.prefs.token = null; token = null })
+        else -> MainScreen { token = null }
+    }
+}
+
+@Composable
+private fun LockScreen(onUnlocked: () -> Unit, onPassword: () -> Unit) {
+    val ctx = LocalContext.current
+    val act = ctx as FragmentActivity
+    var error by remember { mutableStateOf<String?>(null) }
+    fun ask() = Secure.prompt(act, "Вход в ICQ Admin", onOk = onUnlocked, onFail = { error = it })
+    LaunchedEffect(Unit) { ask() }
+    Column(
+        Modifier.fillMaxSize().systemBarsPadding().padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
+    ) {
+        Box(Modifier.size(96.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer).clickable { ask() },
+            contentAlignment = Alignment.Center) {
+            Icon(Icons.Filled.Fingerprint, "Отпечаток", tint = Green, modifier = Modifier.size(56.dp))
+        }
+        Spacer(Modifier.height(16.dp))
+        Text("ICQ Admin заблокирован", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Text("Приложите палец", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp), textAlign = TextAlign.Center) }
+        Spacer(Modifier.height(20.dp))
+        TextButton(onClick = onPassword) { Text("Войти по паролю") }
+    }
 }
 
 // ================================================================== login
@@ -112,21 +143,59 @@ private fun LoginScreen(onDone: () -> Unit) {
     var password by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    // the server address is hidden: 7 taps on the logo show it
+    var taps by remember { mutableIntStateOf(0) }
+    var offerFinger by remember { mutableStateOf<Pair<String, String>?>(null) }
+    val act = ctx as FragmentActivity
+    fun doLogin(l: String, p: String, fromFinger: Boolean) {
+        busy = true; error = null
+        scope.launch {
+            try {
+                val device = Build.MANUFACTURER.replaceFirstChar { it.uppercase() } + " " + Build.MODEL
+                val r = Core.api.login(server.ifBlank { "https://icq-new.online" }, l, p, device)
+                Core.prefs.token = r.token
+                Core.prefs.login = r.admin.login
+                Core.prefs.role = r.admin.role
+                Core.prefs.perms = r.admin.perms.toSet()
+                if (fromFinger) Secure.save(ctx, l, p)
+                if (!fromFinger && Secure.canUse(ctx) && Secure.load(ctx)?.let { it.first != l || it.second != p } != false) {
+                    offerFinger = l to p
+                } else onDone()
+            } catch (e: Exception) {
+                error = e.message ?: "Нет связи с сервером"
+                if (fromFinger && (e as? ApiError)?.code == 400) Secure.clear(ctx) // the password was changed
+            }
+            busy = false
+        }
+    }
+    offerFinger?.let { (l, p) ->
+        AlertDialog(
+            onDismissRequest = { offerFinger = null; onDone() },
+            icon = { Icon(Icons.Filled.Fingerprint, null, tint = Green) },
+            title = { Text("Входить по отпечатку?") },
+            text = { Text("В следующий раз ICQ Admin откроется отпечатком пальца — без пароля.") },
+            confirmButton = { TextButton(onClick = { Secure.save(ctx, l, p); offerFinger = null; onDone() }) { Text("Да") } },
+            dismissButton = { TextButton(onClick = { offerFinger = null; onDone() }) { Text("Нет") } },
+        )
+    }
     Column(
         Modifier.fillMaxSize().systemBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Spacer(Modifier.height(40.dp))
-        Box(Modifier.size(84.dp).clip(CircleShape).background(Color(0xFF7A0E1E)), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(84.dp).clip(CircleShape).background(Color(0xFF7A0E1E)).clickable { taps++ },
+            contentAlignment = Alignment.Center) {
             Icon(Icons.Filled.AdminPanelSettings, null, tint = Color.White, modifier = Modifier.size(46.dp))
         }
         Spacer(Modifier.height(12.dp))
         Text("ICQ Admin", fontSize = 30.sp, fontWeight = FontWeight.Bold)
         Text("Для администраторов ICQ New", color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(28.dp))
-        OutlinedTextField(server, { server = it.trim() }, label = { Text("Сервер") }, singleLine = true,
-            modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
-        Spacer(Modifier.height(8.dp))
+        if (taps >= 7) {
+            OutlinedTextField(server, { server = it.trim() }, label = { Text("Сервер") }, singleLine = true,
+                modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
+            Spacer(Modifier.height(8.dp))
+        }
         OutlinedTextField(login, { login = it.trim() }, label = { Text("Логин") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(password, { password = it }, label = { Text("Пароль") }, singleLine = true,
@@ -136,26 +205,31 @@ private fun LoginScreen(onDone: () -> Unit) {
         Spacer(Modifier.height(18.dp))
         Button(
             enabled = !busy && login.isNotBlank() && password.isNotBlank(),
-            onClick = {
-                busy = true; error = null
-                scope.launch {
-                    try {
-                        val device = Build.MANUFACTURER.replaceFirstChar { it.uppercase() } + " " + Build.MODEL
-                        val r = Core.api.login(server.ifBlank { "https://icq-new.online" }, login, password, device)
-                        Core.prefs.token = r.token
-                        Core.prefs.login = r.admin.login
-                        Core.prefs.role = r.admin.role
-                        Core.prefs.perms = r.admin.perms.toSet()
-                        onDone()
-                    } catch (e: Exception) {
-                        error = e.message ?: "Нет связи с сервером"
-                    }
-                    busy = false
-                }
-            },
+            onClick = { doLogin(login, password, false) },
             modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(14.dp),
         ) {
             if (busy) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp) else Text("Войти", fontSize = 17.sp)
+        }
+        if (Secure.has(ctx) && Secure.canUse(ctx)) {
+            Spacer(Modifier.height(10.dp))
+            OutlinedButton(
+                enabled = !busy,
+                onClick = {
+                    Secure.prompt(act, "Вход по отпечатку", onOk = {
+                        Secure.load(ctx)?.let { (l, p) -> doLogin(l, p, true) } ?: run { error = "Войдите по паролю" }
+                    }, onFail = { error = it })
+                },
+                modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(14.dp),
+            ) {
+                Icon(Icons.Filled.Fingerprint, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Войти по отпечатку", fontSize = 16.sp)
+            }
+            LaunchedEffect(Unit) {
+                Secure.prompt(act, "Вход по отпечатку", onOk = {
+                    Secure.load(ctx)?.let { (l, p) -> doLogin(l, p, true) }
+                }, onFail = { })
+            }
         }
         Spacer(Modifier.height(14.dp))
         Text(
@@ -644,7 +718,6 @@ private fun MoreScreen(me: MeResp?, isSuper: Boolean, can: (String) -> Boolean, 
                 Text(me?.admin?.login ?: Core.prefs.login, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 Text(if (isSuper) "Супер-админ · все права" else "Админ", color = Green)
                 Spacer(Modifier.height(6.dp))
-                Text("Сервер: " + Core.prefs.server, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (!isSuper) Text(
                     "Права: " + (me?.admin?.perms ?: Core.prefs.perms.toList()).joinToString { PERM_NAMES[it] ?: it },
                     fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -652,6 +725,13 @@ private fun MoreScreen(me: MeResp?, isSuper: Boolean, can: (String) -> Boolean, 
                 me?.let { Text("Пользователей: ${it.users} · онлайн: ${it.online} · ждут SMS: ${it.waitingSms}", fontSize = 13.sp) }
             }
         }
+        val ctx = LocalContext.current
+        var finger by remember { mutableStateOf(Secure.has(ctx)) }
+        if (finger) MenuItem(Icons.Filled.Fingerprint, "Отключить вход по отпечатку") { Secure.clear(ctx); finger = false }
+        else if (Secure.canUse(ctx)) Text(
+            "Вход по отпечатку: выйдите и войдите по паролю — приложение предложит включить его.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 6.dp),
+        )
         if (can("fragment")) MenuItem(Icons.Filled.Diamond, "Fragment — @имена на продажу") { open("fragment") }
         if (isSuper) {
             MenuItem(Icons.Filled.Dns, "Серверы (VPS): нагрузка, память, диск") { open("servers") }
